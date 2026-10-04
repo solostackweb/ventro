@@ -1,0 +1,149 @@
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+@layer base {
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+    --border-default: #e2e8f0;
+    --accent-blue: #2563eb;
+    --accent-green: #059669;
+    --accent-amber: #d97706;
+    --accent-red: #dc2626;
+    --accent-purple: #7c3aed;
+    --badge-verified: #059669;
+    --badge-partial: #d97706;
+    --badge-unverified: #64748b;
+    --badge-conflicted: #dc2626;
+    --font-inter: 'Inter', system-ui, sans-serif;
+    --font-noto: 'Noto Sans', system-ui, sans-serif;
+  }
+
+  .dark {
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #334155;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #64748b;
+    --border-default: #334155;
+    --accent-blue: #3b82f6;
+    --accent-green: #10b981;
+    --accent-amber: #f59e0b;
+    --accent-red: #ef4444;
+    --accent-purple: #a855f7;
+    --badge-verified: #10b981;
+    --badge-partial: #f59e0b;
+    --badge-unverified: #94a3b8;
+    --badge-conflicted: #ef4444;
+  }
+
+  * {
+    @apply border-border-default;
+  }
+
+  body {
+    @apply bg-bg-primary text-text-primary antialiased;
+    font-family: var(--font-inter);
+  }
+
+  .font-indic {
+    font-family: var(--font-noto);
+  }
+}
+
+@layer components {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply bg-accent-blue text-white hover:bg-blue-700 focus:ring-accent-blue;
+  }
+
+  .btn-secondary {
+    @apply bg-bg-tertiary text-text-primary hover:bg-border-default focus:ring-border-default;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-text-secondary hover:bg-bg-tertiary focus:ring-border-default;
+  }
+
+  .btn-danger {
+    @apply bg-accent-red text-white hover:bg-red-700 focus:ring-accent-red;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border-default bg-bg-primary px-3 py-2 text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-text-secondary mb-1;
+  }
+
+  .card {
+    @apply bg-bg-secondary border border-border-default rounded-xl;
+  }
+
+  .card-header {
+    @apply p-4 border-b border-border-default;
+  }
+
+  .card-content {
+    @apply p-4;
+  }
+
+  .badge,
+  .badge-verified,
+  .badge-partial,
+  .badge-unverified,
+  .badge-conflicted {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-verified {
+    @apply bg-badge-verified text-white;
+  }
+
+  .badge-partial {
+    @apply bg-badge-partial text-white;
+  }
+
+  .badge-unverified {
+    @apply bg-badge-unverified text-white;
+  }
+
+  .badge-conflicted {
+    @apply bg-badge-conflicted text-white;
+  }
+
+  .link {
+    @apply text-accent-blue hover:underline transition-colors;
+  }
+
+  .skeleton {
+    @apply animate-pulse bg-bg-tertiary rounded;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

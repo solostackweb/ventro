@@ -1,0 +1,60 @@
+name: Scheduled Ingestion
+
+on:
+  schedule:
+    # One hourly job also picks up daily/weekly sources at 02:00 UTC.
+    - cron: '0 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+concurrency:
+  group: scheduled-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingestion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+      R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+      # API keys for gap-fill sources (optional)
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run scheduled ingestion
+        if: github.event_name == 'schedule'
+        run: npm run ingest:scheduled
+
+      - name: Run manual ingestion
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run ingest:scheduled -- --all
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-logs
+          path: |
+            *.log
+          retention-days: 7
