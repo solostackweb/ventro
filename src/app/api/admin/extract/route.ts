@@ -1,8 +1,5 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
-import { extractFundingEvents } from '@/lib/ingestion/funding-extractor';
-import { extractStatedThesisForAllFunds, computeObservedThesisForAllFunds } from '@/lib/ingestion/thesis-extractor';
-import { runPatternDetectionPipeline } from '@/lib/ingestion/pattern-detector';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,17 +31,20 @@ export async function POST(request: NextRequest) {
     const results: Record<string, any> = {};
     
     if (!type || type === 'funding') {
+      const { extractFundingEvents } = await import('@/lib/ingestion/funding-extractor');
       await extractFundingEvents();
       results.funding = 'completed';
     }
     
     if (!type || type === 'thesis') {
+      const { extractStatedThesisForAllFunds, computeObservedThesisForAllFunds } = await import('@/lib/ingestion/thesis-extractor');
       await extractStatedThesisForAllFunds();
       await computeObservedThesisForAllFunds();
       results.thesis = 'completed';
     }
     
     if (!type || type === 'patterns') {
+      const { runPatternDetectionPipeline } = await import('@/lib/ingestion/pattern-detector');
       await runPatternDetectionPipeline();
       results.patterns = 'completed';
     }
