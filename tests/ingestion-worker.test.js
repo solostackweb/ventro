@@ -5,6 +5,12 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 describe('scheduled ingestion entry point', () => {
+  it('uses a Node runtime with native WebSocket support', () => {
+    const workflow = fs.readFileSync(path.join(root, '.github/workflows/scheduled-ingestion.yml'), 'utf8');
+    const version = Number(workflow.match(/node-version:\s*['"]?(\d+)/)?.[1]);
+    expect(version).toBeGreaterThanOrEqual(22);
+  });
+
   it('runs a real TypeScript worker rather than a non-existent compiled module', () => {
     const workflow = fs.readFileSync(path.join(root, '.github/workflows/scheduled-ingestion.yml'), 'utf8');
     expect(workflow).toMatch(/npm run ingest:scheduled/);
