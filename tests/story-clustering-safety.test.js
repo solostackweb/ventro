@@ -96,4 +96,37 @@ describe('story clustering data safety', () => {
     await expect(runStoryClustering()).rejects.toThrow('database unavailable');
     expect(acknowledged).toBe(false);
   });
+
+  it('persists a source matched to a database story without transient entity arrays', async () => {
+    let acknowledged = false;
+    const archive = {
+      select: () => archive,
+      eq: () => archive,
+      limit: async () => ({ data: [{
+        id: 'archive-1', source_id: 'source-a', url: 'https://a.example/story',
+        raw_content: '', metadata: { title: 'Existing headline' },
+      }], error: null }),
+      update: () => archive,
+      in: async () => { acknowledged = true; return { error: null }; },
+    };
+    const stories = {
+      select: () => stories,
+      order: () => stories,
+      limit: async () => ({ data: [{
+        id: 'story-1', canonical_url: 'https://a.example/story',
+        headline: 'Existing headline', summary: '', source_count: 1,
+        source_urls: ['https://a.example/story'], supporting_sources: ['source-a'],
+      }], error: null }),
+      upsert: () => stories,
+      single: async () => ({ data: { id: 'story-1' }, error: null }),
+    };
+    const sourceLinks = { upsert: async () => ({ error: null }) };
+    const { runStoryClustering } = loadClustering({
+      from: (table) => table === 'source_archive' ? archive
+        : table === 'story_sources' ? sourceLinks : stories,
+    });
+
+    await expect(runStoryClustering()).resolves.toBe(1);
+    expect(acknowledged).toBe(true);
+  });
 });

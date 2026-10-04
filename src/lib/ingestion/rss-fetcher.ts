@@ -22,7 +22,7 @@ const FEED_URLS: Record<string, string[]> = {
   'cohere-blog': ['https://cohere.com/blog/rss.xml'],
   'huggingface-blog': ['https://huggingface.co/blog/feed.xml'],
   'yc-blog': ['https://www.ycombinator.com/blog/feed.xml'],
-  'sebi-rss': ['https://www.sebi.gov.in/rss.html'],
+  'sebi-rss': ['https://www.sebi.gov.in/sebirss.xml'],
   'pib-rss': ['https://pib.gov.in/RssMain.aspx'],
   'lightspeed-blog': ['https://lsvp.com/feed/'],
   'greylock-blog': ['https://greylock.com/feed/'],

@@ -223,7 +223,7 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
     if (error || !story) throw new Error(`Story upsert failed: ${error?.message || 'no row returned'}`);
     
     // Link companies
-    for (const company of cluster.companies) {
+    for (const company of Array.isArray(cluster.companies) ? cluster.companies : []) {
       const { error: linkError } = await supabase
         .from('story_companies')
         .upsert({
@@ -235,7 +235,7 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
     }
     
     // Link investors
-    for (const investor of cluster.investors) {
+    for (const investor of Array.isArray(cluster.investors) ? cluster.investors : []) {
       const { error: linkError } = await supabase
         .from('story_investors')
         .upsert({
@@ -259,7 +259,7 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
   }
 }
 
-export async function runStoryClustering(): Promise<void> {
+export async function runStoryClustering(): Promise<number> {
   const supabase = ingestionSupabase;
   
   // Fetch unprocessed items from source_archive
@@ -272,7 +272,7 @@ export async function runStoryClustering(): Promise<void> {
   if (error) throw new Error(`Archive read failed: ${error.message}`);
   if (!archiveItems?.length) {
     console.log('No unprocessed archive items found');
-    return;
+    return 0;
   }
   
   // Convert to FetchResult format
@@ -300,4 +300,5 @@ export async function runStoryClustering(): Promise<void> {
   if (updateError) throw new Error(`Archive acknowledgement failed: ${updateError.message}`);
   
   console.log(`Clustered ${newStories.length} items into ${clusters.length} stories`);
+  return newStories.length;
 }

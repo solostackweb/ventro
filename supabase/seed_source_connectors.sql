@@ -231,7 +231,7 @@ INSERT INTO source_connectors (
   'rss', 'none', '60/min', 'yes', 'https://sebi.gov.in/terms',
   'full_text', true, 'yes', 90,
   ARRAY['regulation', 'circular'], 'daily', 'ingestion-team', 'approved', '2026-09-30',
-  'Feed: https://www.sebi.gov.in/rss.html'
+  'Feed: https://www.sebi.gov.in/sebirss.xml'
 ),
 (
   'pib-releases', 'PIB Press Releases', 'government', 'https://pib.gov.in',

@@ -7,11 +7,12 @@ const { ingestionSupabase } = await jiti.import('../src/lib/supabase/ingestion.t
 
 const scheduledAt = new Date();
 const runAll = process.argv.includes('--all');
+const clusterOnly = process.argv.includes('--cluster-only');
 const isDailyRun = scheduledAt.getUTCHours() === 2;
 const isWeeklyRun = isDailyRun && scheduledAt.getUTCDay() === 1;
 
-const connectors = await loadApprovedConnectors();
-if (connectors.length === 0) {
+const connectors = clusterOnly ? [] : await loadApprovedConnectors();
+if (!clusterOnly && connectors.length === 0) {
   throw new Error('No approved source connectors could be loaded');
 }
 const due = connectors.filter((source) => runAll ||
@@ -45,8 +46,16 @@ for (const source of due) {
   }
 }
 
+let itemsClustered = 0;
 try {
-  await runStoryClustering();
+  // A recovery run drains archived items without refetching every feed.
+  // Each batch is acknowledged only after its stories and links are saved.
+  const maxBatches = clusterOnly ? 20 : 1;
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const count = await runStoryClustering();
+    itemsClustered += count;
+    if (count < 100) break;
+  }
 } catch (error) {
   console.error('Story clustering failed:', error);
   process.exitCode = 1;
@@ -62,4 +71,5 @@ console.log(JSON.stringify({
   sources_failed: results.filter((result) => !result.success).length,
   items_fetched: results.reduce((sum, result) => sum + result.items_fetched, 0),
   items_new: results.reduce((sum, result) => sum + result.items_new, 0),
+  items_clustered: itemsClustered,
 }));

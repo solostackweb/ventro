@@ -4,7 +4,15 @@ on:
   schedule:
     # One hourly job also picks up daily/weekly sources at 02:00 UTC.
     - cron: '0 * * * *'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run all sources or only process the archived backlog'
+        type: choice
+        options:
+          - full
+          - clustering
+        default: full
 
 concurrency:
   group: scheduled-ingestion
@@ -47,8 +55,12 @@ jobs:
         run: npm run ingest:scheduled
 
       - name: Run manual ingestion
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'clustering'
         run: npm run ingest:scheduled -- --all
+
+      - name: Process archived backlog
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'clustering'
+        run: npm run ingest:scheduled -- --cluster-only
 
       - name: Upload logs on failure
         if: failure()
