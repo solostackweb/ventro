@@ -114,7 +114,7 @@ Open a pattern card → see the time window, baseline, distinct companies/funds,
 - Workspace contains follows, saved stories/profiles/patterns, private notes, personalized feed settings, and alert frequency. Users can explain or reset personalization.
 - Community initially supports discussion attached to a company, investor, or pattern; basic reporting and moderation. No free-form public claims are promoted into the factual corpus without independent verification.
 
-## 5. Access, pricing, and trial
+## 5. Access, pricing, and trial yes 
 
 - **One paid plan:** USD **$10/month**, before applicable taxes. No annual tier or complex feature matrix in v1.
 - **Masters' Union student offer:** exactly one **10-day free-access trial** after successful verification of an email whose domain is exactly `mastersunion.org` (case-insensitive). `name@sub.mastersunion.org`, lookalike domains, and unverified addresses do not qualify. Do not imply institutional endorsement.
