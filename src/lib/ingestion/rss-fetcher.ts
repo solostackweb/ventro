@@ -129,18 +129,31 @@ async function storeFetchResults(results: FetchResult[]): Promise<{ new: number;
   const supabase = ingestionSupabase;
   let newCount = 0;
   let updatedCount = 0;
+  const hashesBySource = new Map<string, Set<string>>();
 
   for (const result of results) {
-    const { data: existing, error: lookupError } = await supabase
-      .from('source_archive')
-      .select('id')
-      .eq('source_id', result.source_id)
-      .eq('content_hash', result.content_hash)
-      .maybeSingle();
+    if (!hashesBySource.has(result.source_id)) hashesBySource.set(result.source_id, new Set());
+    hashesBySource.get(result.source_id)!.add(result.content_hash);
+  }
 
-    if (lookupError) throw new Error(`Archive lookup failed for ${result.source_id}: ${lookupError.message}`);
+  const archivedHashes = new Map<string, Set<string>>();
+  for (const [sourceId, hashes] of hashesBySource) {
+    const existingHashes = new Set<string>();
+    const allHashes = [...hashes];
+    for (let offset = 0; offset < allHashes.length; offset += 100) {
+      const { data, error } = await supabase
+        .from('source_archive')
+        .select('content_hash')
+        .eq('source_id', sourceId)
+        .in('content_hash', allHashes.slice(offset, offset + 100));
+      if (error) throw new Error(`Archive lookup failed for ${sourceId}: ${error.message}`);
+      for (const row of data || []) existingHashes.add(row.content_hash);
+    }
+    archivedHashes.set(sourceId, existingHashes);
+  }
 
-    if (existing) {
+  for (const result of results) {
+    if (archivedHashes.get(result.source_id)!.has(result.content_hash)) {
       updatedCount++;
       continue;
     }
@@ -185,6 +198,7 @@ async function storeFetchResults(results: FetchResult[]): Promise<{ new: number;
       permissions: result.permissions,
     });
     if (insertError) throw new Error(`Archive insert failed for ${result.source_id}: ${insertError.message}`);
+    archivedHashes.get(result.source_id)!.add(result.content_hash);
     newCount++;
   }
 
