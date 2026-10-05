@@ -89,8 +89,11 @@ describe('story clustering data safety', () => {
       upsert: () => stories,
       single: async () => ({ data: null, error: { message: 'database unavailable' } }),
     };
+    const catalog = { select: () => catalog, order: () => catalog,
+      range: async () => ({ data: [], error: null }) };
     const { runStoryClustering } = loadClustering({
-      from: (table) => table === 'source_archive' ? archive : stories,
+      from: (table) => table === 'source_archive' ? archive
+        : table === 'companies' || table === 'funds' ? catalog : stories,
     });
 
     await expect(runStoryClustering()).rejects.toThrow('database unavailable');
@@ -121,9 +124,12 @@ describe('story clustering data safety', () => {
       single: async () => ({ data: { id: 'story-1' }, error: null }),
     };
     const sourceLinks = { upsert: async () => ({ error: null }) };
+    const catalog = { select: () => catalog, order: () => catalog,
+      range: async () => ({ data: [], error: null }) };
     const { runStoryClustering } = loadClustering({
       from: (table) => table === 'source_archive' ? archive
-        : table === 'story_sources' ? sourceLinks : stories,
+        : table === 'story_sources' ? sourceLinks
+          : table === 'companies' || table === 'funds' ? catalog : stories,
     });
 
     await expect(runStoryClustering()).resolves.toBe(1);

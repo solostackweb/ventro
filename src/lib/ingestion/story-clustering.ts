@@ -53,6 +53,53 @@ interface ClusteredStory {
   supporting_sources: string[];
 }
 
+interface NamedEntity { id: string; canonical_name: string }
+interface EntityCatalog { companies: NamedEntity[]; funds: NamedEntity[] }
+
+function matchNames(text: string, entities: NamedEntity[]): NamedEntity[] {
+  const matches: { entity: NamedEntity; start: number; end: number }[] = [];
+  const ambiguous = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const entity of entities) {
+    const name = entity.canonical_name?.trim();
+    if (!name || name.length < 4) continue;
+    const key = name.toLocaleLowerCase();
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  for (const [name, count] of counts) if (count > 1) ambiguous.add(name);
+
+  for (const entity of entities) {
+    const name = entity.canonical_name?.trim();
+    if (!name || name.length < 4 || ambiguous.has(name.toLocaleLowerCase())) continue;
+    const pattern = name.split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+    const expression = new RegExp(`(^|[^\\p{L}\\p{N}])(${pattern})(?=$|[^\\p{L}\\p{N}])`, 'giu');
+    for (const match of text.matchAll(expression)) {
+      const start = (match.index || 0) + match[1].length;
+      matches.push({ entity, start, end: start + match[2].length });
+    }
+  }
+
+  matches.sort((a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start);
+  const selected: typeof matches = [];
+  for (const match of matches) {
+    if (!selected.some(item => item.start < match.end && match.start < item.end)
+        && !selected.some(item => item.entity.id === match.entity.id)) selected.push(match);
+  }
+  return selected.sort((a, b) => a.start - b.start).map(item => item.entity);
+}
+
+async function loadNamedEntities(table: 'companies' | 'funds'): Promise<NamedEntity[]> {
+  const rows: NamedEntity[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await ingestionSupabase.from(table)
+      .select('id, canonical_name').order('id').range(offset, offset + 999);
+    if (error) throw new Error(`${table} catalog lookup failed: ${error.message}`);
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return rows;
+}
+
 async function computeContentHash(content: string): Promise<string> {
   return crypto.createHash('sha256').update(content).digest('hex').slice(0, 32);
 }
@@ -88,7 +135,7 @@ function calculateContentSimilarity(content1: string, content2: string): number 
   return union.size > 0 ? intersection.size / union.size : 0;
 }
 
-export async function clusterStories(newStories: any[]): Promise<any[]> {
+export async function clusterStories(newStories: any[], entities: EntityCatalog = { companies: [], funds: [] }): Promise<any[]> {
   const supabase = ingestionSupabase;
   const clusters: any[] = [];
   
@@ -189,6 +236,15 @@ export async function clusterStories(newStories: any[]): Promise<any[]> {
       });
     }
   }
+
+  for (const cluster of clusters) {
+    const companyMatches = matchNames(cluster.headline || '', entities.companies);
+    const fundMatches = matchNames(`${cluster.headline || ''} ${cluster.summary || ''}`, entities.funds);
+    cluster.companies = companyMatches.map((company, index) => ({
+      company_id: company.id, role: index === 0 ? 'primary' : 'mentioned',
+    }));
+    cluster.investors = fundMatches.map(fund => ({ fund_id: fund.id, role: 'mentioned' }));
+  }
   
   return clusters;
 }
@@ -287,7 +343,10 @@ export async function runStoryClustering(): Promise<number> {
   }));
   
   // Cluster stories
-  const clusters = await clusterStories(newStories);
+  const [companies, funds] = await Promise.all([
+    loadNamedEntities('companies'), loadNamedEntities('funds'),
+  ]);
+  const clusters = await clusterStories(newStories, { companies, funds });
   
   // Save clustered stories
   await saveClusteredStories(clusters);
