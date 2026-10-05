@@ -19,8 +19,7 @@ export async function POST(request: NextRequest) {
       .eq('id', user.id)
       .single();
     
-    // Simple admin check - in production use proper role system
-    const isAdmin = user.email?.includes('admin') || profile?.role === 'admin';
+    const isAdmin = profile?.role === 'admin';
     if (!isAdmin) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
@@ -56,9 +55,21 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const supabase = await createServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+    if (profile?.role !== 'admin') {
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
     
     const { data: rounds, error } = await supabase
       .from('funding_rounds')

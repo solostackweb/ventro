@@ -40,6 +40,7 @@ export default function AdminPage() {
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [logs, setLogs] = useState<FetchLog[]>([]);
   const [loadingSources, setLoadingSources] = useState(true);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [loadingLogs, setLoadingLogs] = useState(true);
 
   const getStatusBadge = (status: string) => {
@@ -60,6 +61,7 @@ export default function AdminPage() {
 
   const fetchSources = async () => {
     setLoadingSources(true);
+    setSourcesError(null);
     try {
       const response = await fetch('/api/admin/sources');
       if (!response.ok) throw new Error('Failed to fetch sources');
@@ -67,6 +69,7 @@ export default function AdminPage() {
       setSources(data.sources || []);
     } catch (error) {
       console.error('Failed to fetch sources:', error);
+      setSourcesError('Sources could not be loaded. Check your access and try again.');
     } finally {
       setLoadingSources(false);
     }
@@ -167,12 +170,17 @@ export default function AdminPage() {
                   <div key={i} className="h-14 bg-bg-secondary animate-pulse rounded border border-border-default" />
                 ))}
               </div>
+            ) : sourcesError ? (
+              <div role="alert" className="rounded-lg border border-accent-red/40 p-4 text-sm text-accent-red">
+                {sourcesError} <Button variant="ghost" size="sm" onClick={fetchSources}>Retry</Button>
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-text-muted border-b border-border-default">
-                      <th className="pb-2 font-medium">Source</th>
+                      <th className="pb-2 font-medium">Source ID</th>
+                      <th className="pb-2 font-medium">Name</th>
                       <th className="pb-2 font-medium">Method</th>
                       <th className="pb-2 font-medium">Status</th>
                       <th className="pb-2 font-medium">Last Fetch</th>
@@ -180,7 +188,6 @@ export default function AdminPage() {
                       <th className="pb-2 font-medium">Items (24h)</th>
                       <th className="pb-2 font-medium">Yield (24h)</th>
                       <th className="pb-2 font-medium">Avg Latency</th>
-                      <th className="pb-2 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -194,7 +201,7 @@ export default function AdminPage() {
                         <td className="py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-24 h-2 bg-bg-tertiary rounded-full overflow-hidden">
-                              <div className={cn('h-full rounded-full transition-all', getHealthColor(source.health))} style={{ width: `${source.health}%` }} />
+                              <div className={cn('h-full rounded-full transition-all', source.health >= 90 ? 'bg-green-600' : source.health >= 60 ? 'bg-amber-600' : 'bg-red-600')} style={{ width: `${source.health}%` }} />
                             </div>
                             <span className={cn('font-medium', getHealthColor(source.health))}>{source.health}%</span>
                           </div>
@@ -202,24 +209,11 @@ export default function AdminPage() {
                         <td className="py-3">{source.items_24h}</td>
                         <td className="py-3">{source.yield_24h}</td>
                         <td className="py-3 text-text-muted">{source.avg_latency_ms}ms</td>
-                        <td className="py-3">
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => alert(`Pause ${source.source_id}`)} disabled={source.status === 'paused' || source.status === 'blocked'}>
-                              Pause
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => alert(`Resume ${source.source_id}`)} disabled={source.status !== 'paused'}>
-                              Resume
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => alert(`Configure ${source.source_id}`)}>
-                              Config
-                            </Button>
-                          </div>
-                        </td>
                       </tr>
                     ))}
                     {filteredSources.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-text-muted">No sources found</td>
+                        <td colSpan={9} className="py-8 text-center text-text-muted">No sources are visible to this account.</td>
                       </tr>
                     )}
                   </tbody>

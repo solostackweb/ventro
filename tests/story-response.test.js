@@ -40,6 +40,22 @@ describe('story response contract', () => {
     }));
   });
 
+  it('shows stored source URLs when a story has no timeline links yet', () => {
+    const normalizeStory = loadNormalizer();
+    const story = normalizeStory({
+      id: 'story-3',
+      canonical_url: 'https://example.com/story',
+      source_urls: ['https://example.com/story', 'https://another.example/report'],
+      story_sources: [],
+      publisher: null,
+      last_checked_at: '2026-10-05T00:00:00Z',
+    });
+    expect(story.story_sources.map((source) => source.source_url)).toEqual([
+      'https://example.com/story',
+      'https://another.example/report',
+    ]);
+  });
+
   it('uses the same normalizer for feed and detail responses', () => {
     const feed = fs.readFileSync(path.resolve(__dirname, '../src/app/api/feed/route.ts'), 'utf8');
     const detail = fs.readFileSync(path.resolve(__dirname, '../src/app/api/stories/[id]/route.ts'), 'utf8');

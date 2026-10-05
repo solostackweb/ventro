@@ -88,7 +88,7 @@ export default function ReviewQueuePage() {
         .eq('id', user.id)
         .single();
 
-      const isAdmin = user.email?.includes('admin') || profile?.role === 'admin';
+      const isAdmin = profile?.role === 'admin';
       if (!isAdmin) return;
 
       // Fetch patterns
@@ -220,7 +220,7 @@ export default function ReviewQueuePage() {
         .eq('id', user.id)
         .single();
 
-      const isAdmin = user.email?.includes('admin') || profile?.role === 'admin';
+      const isAdmin = profile?.role === 'admin';
       if (!isAdmin) return;
 
       let table: string;

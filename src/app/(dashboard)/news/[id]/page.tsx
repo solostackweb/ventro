@@ -206,8 +206,7 @@ export default function StoryDetailPage() {
 
           {/* Publisher info */}
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            <span>By {story.publisher}</span>
-            <span>•</span>
+            {story.publisher && <><span>By {story.publisher}</span><span>•</span></>}
             <span>{formatDate(story.event_date)}</span>
             {story.geography && (
               <Badge variant="blue" className="text-xs">🌍 {story.geography.toUpperCase()}</Badge>

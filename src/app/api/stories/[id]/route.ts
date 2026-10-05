@@ -23,6 +23,7 @@ export async function GET(
         event_date,
         publisher,
         source_count,
+        source_urls,
         ai_topics,
         geography,
         event_type,
