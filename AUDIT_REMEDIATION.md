@@ -61,3 +61,10 @@ Remaining data-integrity risk: `round_participants` has a unique constraint on `
 - Story clustering now looks up company and fund catalogs once per batch, links exact-name matches, rejects ambiguous duplicate names, and persists links before acknowledging archive rows. A headline match can identify a primary company; fund matches remain `mentioned` only.
 - Funding extraction now reads the company/fund relationship in its actual object shape. It does not promote a mere fund mention into a round participant; only an explicitly classified `lead` or `participant` story association can become a participant edge.
 - Clustering still leaves every new story `unverified`. No automatic verification, role review, extraction scheduling, or production run was added. These are deliberate remaining gates, not completed pipeline stages. The nullable participant uniqueness risk above also remains open, so do not schedule extraction yet.
+
+## Local news presentation repair (2026-10-05)
+
+- RSS ingestion now retains a safe feed-provided image URL, source publisher, and reuse-permitted readable excerpt in the archive. New clustered stories persist `image_url` and `summary_kind`; news feed/detail APIs and pages display those fields with a direct original-article link.
+- Excerpts are explicitly labelled `Source excerpt`, not complete-article summaries. A separate permitted full-article fetch and summarization job is still needed for the latter. Existing processed stories need backfill; this code does not invent images or summaries for them.
+- `20261005000000_add_story_presentation.sql` must be applied before deploying the new API field selections. No production migration or backfill was run here.
+- The intended admin/review contract and current gaps are documented in `ADMIN_PIPELINE.md`.
