@@ -10,9 +10,10 @@ import { Input } from '@/components/ui/Input';
 import { MultiSelect } from '@/components/ui/Select';
 import { cn, formatCurrency, formatDate, formatRelativeTime } from '@/lib/utils/helpers';
 import { Investment, VerificationStatus, Stage, Geography, AITheme } from '@/types';
+import { summarizeVisibleInvestments } from '@/lib/utils/investment-graph';
 
 interface InvestmentGraphResponse {
-  investments: any[];
+  investments: Investment[];
   pagination: {
     page: number;
     limit: number;
@@ -88,8 +89,12 @@ const getRoleBadge = (role: string) => {
   switch (role) {
     case 'lead':
       return <Badge variant="green">Lead</Badge>;
+    case 'co_lead':
+      return <Badge variant="green">Co-lead</Badge>;
     case 'participant':
       return <Badge variant="blue">Participant</Badge>;
+    case 'mentioned':
+      return <Badge variant="amber">Mentioned</Badge>;
     default:
       return <Badge variant="amber">Undisclosed</Badge>;
   }
@@ -173,6 +178,10 @@ export default function InvestmentsPage() {
     setPage(1);
   };
 
+  const visibleSummary = summarizeVisibleInvestments(investments);
+  const hasActiveFilters = stages.length > 0 || geographies.length > 0 || topics.length > 0 ||
+    ycBatches.length > 0 || Boolean(investorId || companyId || dateFrom || dateTo || verifiedOnly);
+
   return (
     <div className="min-h-screen bg-bg-primary">
       <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
@@ -187,7 +196,7 @@ export default function InvestmentsPage() {
       <main className="mx-auto max-w-7xl px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Investment Tracker</h1>
-          <p className="text-text-secondary">Track {totalInvestments || 'AI'} funding rounds with verified data</p>
+          <p className="text-text-secondary">Track cited AI funding rounds and investor participations</p>
         </div>
 
         {/* Filters */}
@@ -299,44 +308,44 @@ export default function InvestmentsPage() {
         <div className="grid sm:grid-cols-4 gap-4 mb-6">
           <Card>
             <CardContent className="p-4">
-              <p className="text-sm text-text-muted">Total Rounds</p>
+              <p className="text-sm text-text-muted">Investor Participations</p>
               <p className="text-2xl font-bold">{totalInvestments}</p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-4">
-              <p className="text-sm text-text-muted">Verified</p>
+              <p className="text-sm text-text-muted">Verified on This Page</p>
               <p className="text-2xl font-bold text-green-600">
-                {investments.filter(i => i.verification_status === 'verified').length}
+                {visibleSummary.verifiedParticipations}
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-4">
-              <p className="text-sm text-text-muted">Total Disclosed Capital</p>
+              <p className="text-sm text-text-muted">Disclosed Round Value on This Page</p>
               <p className="text-2xl font-bold">
-                {formatCurrency(investments.reduce((sum, i) => sum + (i.amount_usd || 0), 0))}
+                {formatCurrency(visibleSummary.disclosedRoundValueUsd)}
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="p-4">
-              <p className="text-sm text-text-muted">Unique Companies</p>
+              <p className="text-sm text-text-muted">Companies on This Page</p>
               <p className="text-2xl font-bold">
-                {new Set(investments.map(i => i.company_id)).size}
+                {visibleSummary.uniqueCompanies}
               </p>
             </CardContent>
           </Card>
         </div>
         {/* Disclosure */}
         <p className="text-xs text-text-muted mb-4">
-          Only disclosed amounts are summed. Undisclosed rounds are excluded from totals, not counted as zero.
+          Round values are counted once per round on this page, even when several investors participated. Undisclosed amounts are excluded.
         </p>
 
         {/* Results */}
         <div className="flex items-center justify-between mb-4">
           <p className="text-text-secondary">
-            Showing {investments.length} of {totalInvestments} rounds
+            Showing {investments.length} of {totalInvestments} investor participations
           </p>
         </div>
 
@@ -377,9 +386,15 @@ export default function InvestmentsPage() {
             <svg className="w-16 h-16 mx-auto text-text-muted mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
-            <h3 className="text-lg font-medium mb-2">No rounds found</h3>
-            <p className="text-text-secondary mb-4">Try adjusting your filters</p>
-            <Button variant="secondary" onClick={clearFilters}>Clear all filters</Button>
+            <h3 className="text-lg font-medium mb-2">
+              {hasActiveFilters ? 'No participations match these filters' : 'No evidence-backed investor participations yet'}
+            </h3>
+            <p className="text-text-secondary mb-4">
+              {hasActiveFilters
+                ? 'Try broader filters to see available rounds.'
+                : 'Rounds appear here after sources, company links, and investor participation are verified.'}
+            </p>
+            {hasActiveFilters && <Button variant="secondary" onClick={clearFilters}>Clear all filters</Button>}
           </div>
         )}
 

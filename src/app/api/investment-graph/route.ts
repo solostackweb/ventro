@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
+import { mapInvestmentGraphRow } from '@/lib/utils/investment-graph';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,8 +8,8 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '20');
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10) || 20));
     const offset = (page - 1) * limit;
     
     const stages = searchParams.get('stages')?.split(',').filter(Boolean) || [];
@@ -56,10 +57,10 @@ export async function GET(request: NextRequest) {
       query = query.in('round_stage', stages);
     }
     if (geographies.length > 0) {
-      query = query.in('company_country', geographies.map(g => g.toUpperCase()));
+      query = query.in('company_country', geographies);
     }
     if (aiTopics.length > 0) {
-      query = query.contains('company_ai_tags', aiTopics);
+      query = query.overlaps('company_ai_tags', aiTopics);
     }
     if (ycBatches.length > 0) {
       query = query.in('yc_batch', ycBatches);
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
       query = query.lte('announced_date', dateTo);
     }
     if (verifiedOnly) {
-      query = query.eq('round_verification', 'verified');
+      query = query.eq('round_verification', 'verified').eq('participant_verification', 'verified');
     }
 
     if (sort === 'date_desc') {
@@ -101,49 +102,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch investment graph' }, { status: 500 });
     }
 
-    // Transform to Investment type compatible format
-    const investments = (rounds || []).map((r: any) => ({
-      id: r.round_id,
-      fund_id: r.fund_id,
-      fund_vehicle_id: r.fund_vehicle_id,
-      company_id: r.company_id,
-      company_name: r.company_name,
-      announced_date: r.announced_date,
-      round_stage: r.round_stage,
-      amount_usd: r.amount_usd,
-      amount_currency: r.amount_currency,
-      investor_role: r.participant_role,
-      source_urls: r.round_sources || [],
-      verification_status: r.round_verification,
-      conflicts: null,
-      created_at: r.announced_date,
-      updated_at: r.announced_date,
-      funds: {
-        id: r.fund_id,
-        canonical_name: r.fund_name,
-        canonical_domain: null,
-        firm_type: r.firm_type,
-        hq_city: null,
-        hq_country: null,
-      },
-      companies: {
-        id: r.company_id,
-        canonical_name: r.company_name,
-        canonical_domain: r.company_domain,
-        ai_tags: r.company_ai_tags,
-        hq_city: null,
-        hq_country: r.company_country,
-        stage: null,
-        yc_batch: r.yc_batch,
-      },
-      fund_vehicles: r.fund_vehicle_id ? {
-        id: r.fund_vehicle_id,
-        name: r.vehicle_name,
-        vintage_year: r.vintage_year,
-        size_usd: null,
-        focus: null,
-      } : null,
-    }));
+    const investments = (rounds || []).map(mapInvestmentGraphRow);
 
     return NextResponse.json({
       investments,

@@ -13,7 +13,7 @@ export type AITheme =
 
 export type Geography = 'us' | 'india' | 'eu' | 'israel' | 'canada' | 'uk' | 'sea' | 'global';
 
-export type Stage = 'pre_seed' | 'seed' | 'series_a' | 'series_b' | 'series_c' | 'series_d' | 'series_e' | 'growth' | 'public';
+export type Stage = 'pre_seed' | 'seed' | 'series_a' | 'series_b' | 'series_c' | 'series_d' | 'series_e' | 'growth' | 'public' | 'ipo' | 'acquisition' | 'grant' | 'debt' | 'convertible' | 'safe' | 'other';
 
 export type VerificationStatus = 'verified' | 'partial' | 'unverified' | 'conflicted';
 
@@ -229,6 +229,7 @@ export interface ObservedTheme {
 
 export interface Investment {
   id: string;
+  round_id?: string;
   fund_id: string;
   fund_vehicle_id: string | null;
   company_id: string;
@@ -237,12 +238,12 @@ export interface Investment {
   round_stage: Stage | null;
   amount_usd: number | null;
   amount_currency: string;
-  investor_role: 'lead' | 'participant' | 'undisclosed';
+  investor_role: 'lead' | 'co_lead' | 'participant' | 'mentioned' | 'undisclosed';
   source_urls: string[];
   verification_status: VerificationStatus;
   conflicts: RoundConflict[];
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
   companies?: {
     id: string;
     canonical_name: string;

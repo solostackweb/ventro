@@ -6,10 +6,10 @@ This audit compares the signed-in production UI with the current repository. It 
 
 - Scheduled ingestion fetches connectors and clusters stories, but does not run verification, entity linking, funding extraction, thesis extraction, or pattern detection (`scripts/run-ingestion.mjs`).
 - New clusters are always `unverified` and have empty company and investor links (`src/lib/ingestion/story-clustering.ts`). Funding extraction only accepts `verified` or `partial` funding stories and relies on company links (`src/lib/ingestion/funding-extractor.ts`).
-- Funding extraction writes `funding_rounds`; the Investments API reads `investments` (`src/app/api/investments/route.ts`). This is a separate schema contract, so triggering extraction alone cannot fill the page.
+- Funding extraction writes `funding_rounds` and `round_participants`; the Investments page reads their `investment_graph` view through `/api/investment-graph`. The separate `/api/investments` route still reads the legacy `investments` table but is not used by this page. The empty page is therefore an upstream evidence/verification gap, not this route mismatch.
 - Pattern detection requires verified investment-graph rows. Production currently shows zero investment rounds and zero patterns.
 
-**Repair order:** establish a single canonical funding-round contract; add deterministic story source verification and entity matching with review states; connect an idempotent, budgeted extraction job after clustering; compute investor theses from cited records; then run pattern detection. Add stage counts and last-success timestamps to admin before scheduling costly jobs.
+**Repair order:** add deterministic story source verification and entity matching with review states; connect an idempotent, budgeted extraction job after clustering; compute investor theses from cited records; then run pattern detection. Add stage counts and last-success timestamps to admin before scheduling costly jobs. Retire or redirect the unused legacy `/api/investments` contract separately.
 
 ## P1: Trust and data presentation
 
@@ -52,4 +52,6 @@ Do not bulk-mark stories verified or fabricate rounds to populate the UI. A smal
 
 These local repairs are not deployed. The P0 pipeline work above remains open.
 
-The Investments API still targets `investments` rather than `investment_graph`. Replacing that route was stopped by the workspace safety review because deleting the live API route during a rewrite could break the service. No route replacement was applied; it needs an approved, additive change with contract tests.
+The Investments page already used `investment_graph`; the earlier claim that its API read the legacy `investments` table was incorrect. No behavioral rewrite of that unused route was applied. The active graph endpoint now preserves participant identity, merges round and participant source links, and requires both sides to be verified before labeling a participation verified. Page-level disclosed value is deduplicated by round, and the empty state explains missing evidence rather than suggesting filters are the only cause.
+
+Remaining data-integrity risk: `round_participants` has a unique constraint on `(round_id, fund_id, fund_vehicle_id)`, but `fund_vehicle_id` can be null. PostgreSQL allows multiple nulls in a standard unique constraint, so repeated extraction may create duplicate firm-level participant rows. Resolve this with a reviewed migration and duplicate audit before automating extraction.
