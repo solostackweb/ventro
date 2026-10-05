@@ -191,7 +191,7 @@ export default function YCBatchDetailPage() {
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-2 mb-3">
                         <div className="flex flex-wrap gap-1">
-                          {company.ai_tags.slice(0, 2).map((tag) => getTopicBadge(tag))}
+                          {company.ai_tags.slice(0, 2).map((tag, idx) => <span key={idx}>{getTopicBadge(tag)}</span>)}
                         </div>
                         {getVerificationBadge(company.verification_status)}
                       </div>

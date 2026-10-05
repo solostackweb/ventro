@@ -1,14 +1,12 @@
-import { createServerClient } from '@/lib/supabase/server';
-import { NextRequest, NextResponse } from 'next/server';
+import { ingestionSupabase } from '@/lib/supabase/ingestion';
+import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const supabase = await createServerClient();
-
     // Get all source connectors
-    const { data: sources, error: sourcesError } = await supabase
+    const { data: sources, error: sourcesError } = await ingestionSupabase
       .from('source_connectors')
       .select('source_id, name, category, access_method, status, cadence, rate_limit, reuse_permission, updated_at')
       .order('source_id');
@@ -16,7 +14,7 @@ export async function GET() {
     if (sourcesError) throw sourcesError;
 
     // Get fetch logs for health calculation
-    const { data: logs, error: logsError } = await supabase
+    const { data: logs, error: logsError } = await ingestionSupabase
       .from('source_fetch_logs')
       .select('source_id, fetched_at, status, items_found, items_new, items_updated, latency_ms')
       .order('fetched_at', { ascending: false })

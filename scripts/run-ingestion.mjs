@@ -3,6 +3,9 @@ import { createJiti } from 'jiti';
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { loadApprovedConnectors, runIngestionForSource } = await jiti.import('../src/lib/ingestion/rss-fetcher.ts');
 const { runStoryClustering } = await jiti.import('../src/lib/ingestion/story-clustering.ts');
+const { extractFundingEvents } = await jiti.import('../src/lib/ingestion/funding-extractor.ts');
+const { detectPatterns } = await jiti.import('../src/lib/ingestion/pattern-detector.ts');
+const { extractStatedThesisForAllFunds, computeObservedThesisForAllFunds } = await jiti.import('../src/lib/ingestion/thesis-extractor.ts');
 const { ingestionSupabase } = await jiti.import('../src/lib/supabase/ingestion.ts');
 
 const scheduledAt = new Date();
@@ -59,6 +62,41 @@ try {
 } catch (error) {
   console.error('Story clustering failed:', error);
   process.exitCode = 1;
+}
+
+// Run funding extraction
+try {
+  console.log('Running funding event extraction...');
+  await extractFundingEvents();
+  console.log('Funding extraction complete');
+} catch (error) {
+  console.error('Funding extraction failed:', error);
+}
+
+// Run pattern detection
+try {
+  console.log('Running pattern detection...');
+  await detectPatterns();
+  console.log('Pattern detection complete');
+} catch (error) {
+  console.error('Pattern detection failed:', error);
+}
+
+// Run thesis extraction
+try {
+  console.log('Running stated thesis extraction...');
+  await extractStatedThesisForAllFunds();
+  console.log('Stated thesis extraction complete');
+} catch (error) {
+  console.error('Stated thesis extraction failed:', error);
+}
+
+try {
+  console.log('Running observed thesis computation...');
+  await computeObservedThesisForAllFunds();
+  console.log('Observed thesis computation complete');
+} catch (error) {
+  console.error('Observed thesis computation failed:', error);
 }
 
 if (results.some((result) => !result.success) || logFailed) {

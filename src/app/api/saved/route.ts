@@ -3,6 +3,33 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+async function fetchItemDetails(supabase: any, items: any[]) {
+  const stories = items.filter(i => i.item_type === 'story');
+  const companies = items.filter(i => i.item_type === 'company');
+  const funds = items.filter(i => i.item_type === 'fund');
+  const patterns = items.filter(i => i.item_type === 'pattern');
+
+  const [storyData, companyData, fundData, patternData] = await Promise.all([
+    stories.length ? supabase.from('stories').select('id, headline, summary, event_date, publisher, source_count, ai_topics, verification_label').in('id', stories.map((s: any) => s.item_id)) : { data: [] },
+    companies.length ? supabase.from('companies').select('id, canonical_name, short_description, ai_tags, stage, hq_city, verification_status').in('id', companies.map((c: any) => c.item_id)) : { data: [] },
+    funds.length ? supabase.from('funds').select('id, canonical_name, canonical_domain, firm_type, hq_city, ai_focus_areas, verification_status').in('id', funds.map((f: any) => f.item_id)) : { data: [] },
+    patterns.length ? supabase.from('patterns').select('id, name, description, confidence, status, distinct_companies, distinct_funds').in('id', patterns.map((p: any) => p.item_id)) : { data: [] },
+  ]);
+
+  const storyMap = new Map((storyData.data || []).map((s: any) => [s.id, s]));
+  const companyMap = new Map((companyData.data || []).map((c: any) => [c.id, c]));
+  const fundMap = new Map((fundData.data || []).map((f: any) => [f.id, f]));
+  const patternMap = new Map((patternData.data || []).map((p: any) => [p.id, p]));
+
+  return items.map(s => ({
+    ...s,
+    item: s.item_type === 'story' ? storyMap.get(s.item_id) :
+          s.item_type === 'company' ? companyMap.get(s.item_id) :
+          s.item_type === 'fund' ? fundMap.get(s.item_id) :
+          s.item_type === 'pattern' ? patternMap.get(s.item_id) : null,
+  }));
+}
+
 export async function GET(request: NextRequest) {
   try {
     const supabase = await createServerClient();
@@ -13,56 +40,14 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type'); // 'story', 'company', 'fund', 'pattern'
+    const type = searchParams.get('type');
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = (page - 1) * limit;
 
     let query = supabase
       .from('saved_items')
-      .select(`
-        id,
-        item_type,
-        item_id,
-        created_at,
-        stories!item_id (
-          id,
-          headline,
-          summary,
-          event_date,
-          publisher,
-          source_count,
-          ai_topics,
-          verification_label
-        ),
-        companies!item_id (
-          id,
-          canonical_name,
-          short_description,
-          ai_tags,
-          stage,
-          hq_city,
-          verification_status
-        ),
-        funds!item_id (
-          id,
-          canonical_name,
-          canonical_domain,
-          firm_type,
-          hq_city,
-          ai_focus_areas,
-          verification_status
-        ),
-        patterns!item_id (
-          id,
-          name,
-          description,
-          confidence,
-          status,
-          distinct_companies,
-          distinct_funds
-        )
-      `, { count: 'exact' })
+      .select('id, item_type, item_id, created_at', { count: 'exact' })
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -78,14 +63,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch saved items' }, { status: 500 });
     }
 
-    // Transform to include item details
-    const transformed = (savedItems || []).map((s: any) => ({
-      id: s.id,
-      item_type: s.item_type,
-      item_id: s.item_id,
-      saved_at: s.created_at,
-      item: s.item_type === 'story' ? s.stories : s.item_type === 'company' ? s.companies : s.item_type === 'fund' ? s.funds : s.patterns,
-    }));
+    // Fetch item details separately (no FK relationships in DB)
+    const transformed = await fetchItemDetails(supabase, savedItems || []);
 
     return NextResponse.json({
       saved: transformed,

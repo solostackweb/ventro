@@ -10,11 +10,21 @@ const EVENT_TYPE_KEYWORDS: Record<string, string[]> = {
   acquisition: ['acquires', 'acquisition', 'acquired', 'merger', 'mergers', 'buys', 'buyout', 'takeover', 'acquihire'],
 };
 
+const AI_TOPIC_KEYWORDS: Record<string, string[]> = {
+  foundation_models: ['foundation model', 'llm', 'large language model', 'gpt', 'claude', 'gemini', 'llama', 'mistral', 'transformer', 'pretraining', 'fine-tuning', 'instruction tuning', 'rlhf', 'model release', 'model launch', 'openai', 'anthropic', 'google deepmind', 'meta ai'],
+  infrastructure: ['infrastructure', 'mlops', 'kubernetes', 'gpu', 'training cluster', 'inference', 'serving', 'deployment', 'monitoring', 'observability', 'vector database', 'embeddings', 'rag', 'retrieval', 'hugging face', 'weights & biases', 'wandb', 'mlflow'],
+  applications: ['application', 'copilot', 'assistant', 'chatbot', 'agent', 'workflow', 'automation', 'productivity', 'coding assistant', 'code generation', 'developer tool', 'ide', 'plugin', 'saas', 'enterprise ai', 'ai startup', 'ai company'],
+  robotics: ['robotics', 'robot', 'autonomous', 'navigation', 'manipulation', 'humanoid', 'simulation', 'reinforcement learning', 'embodied ai', 'figure ai', 'tesla bot'],
+  hardware: ['chip', 'semiconductor', 'gpu', 'tpu', 'asic', 'accelerator', 'hardware', 'processor', 'nvidia', 'amd', 'intel', 'groq', 'cerebras', 'samba', 'etched', 'tenstorrent'],
+  research: ['research', 'paper', 'arxiv', 'benchmark', 'evaluation', 'theory', 'algorithm', 'novel', 'state-of-the-art', 'sota', 'iclr', 'neurips', 'icml', 'acl'],
+  funding: ['funding', 'series a', 'series b', 'series c', 'seed', 'pre-seed', 'venture capital', 'vc', 'investment', 'raises', 'raised', 'led by', 'backs', 'capital', 'valuation'],
+};
+
 function classifyEventType(text: string): string {
   const lower = text.toLowerCase();
   let bestType = 'other';
   let bestScore = 0;
-
+  
   for (const [type, keywords] of Object.entries(EVENT_TYPE_KEYWORDS)) {
     let score = 0;
     for (const kw of keywords) {
@@ -25,8 +35,25 @@ function classifyEventType(text: string): string {
       bestType = type;
     }
   }
-
+  
   return bestType;
+}
+
+function classifyAITopics(text: string): string[] {
+  const lower = text.toLowerCase();
+  const topics: string[] = [];
+  
+  for (const [topic, keywords] of Object.entries(AI_TOPIC_KEYWORDS)) {
+    let score = 0;
+    for (const kw of keywords) {
+      if (lower.includes(kw)) score++;
+    }
+    if (score >= 1) { // At least one keyword match
+      topics.push(topic);
+    }
+  }
+  
+  return topics;
 }
 
 interface ClusteredStory {
@@ -231,7 +258,7 @@ export async function clusterStories(newStories: FetchResult[], entities: Entity
         source_count: 1,
         companies: [],
         investors: [],
-        ai_topics: [],
+        ai_topics: classifyAITopics(fullText),
         geography: null,
         event_type: classifyEventType(fullText),
         verification_label: 'unverified',

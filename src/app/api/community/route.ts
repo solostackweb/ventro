@@ -37,9 +37,10 @@ export async function GET(request: NextRequest) {
             parent_id,
             content,
             is_hidden,
+            hidden_by,
             created_at,
             updated_at,
-            user_profiles!inner (
+            user_profiles!discussion_comments_user_id_fkey (
               id,
               email,
               role
@@ -85,9 +86,10 @@ export async function GET(request: NextRequest) {
           parent_id,
           content,
           is_hidden,
+          hidden_by,
           created_at,
           updated_at,
-          user_profiles!inner (
+          user_profiles!discussion_comments_user_id_fkey (
             id,
             email,
             role

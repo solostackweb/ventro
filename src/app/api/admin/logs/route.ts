@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { ingestionSupabase } from '@/lib/supabase/ingestion';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -9,9 +9,7 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '100');
     const sourceId = searchParams.get('source_id');
 
-    const supabase = await createServerClient();
-
-    let query = supabase
+    let query = ingestionSupabase
       .from('source_fetch_logs')
       .select('id, source_id, url, fetched_at, status, error_message, items_found, items_new, items_updated, latency_ms')
       .order('fetched_at', { ascending: false })
