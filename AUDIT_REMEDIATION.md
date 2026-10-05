@@ -55,3 +55,9 @@ These local repairs are not deployed. The P0 pipeline work above remains open.
 The Investments page already used `investment_graph`; the earlier claim that its API read the legacy `investments` table was incorrect. No behavioral rewrite of that unused route was applied. The active graph endpoint now preserves participant identity, merges round and participant source links, and requires both sides to be verified before labeling a participation verified. Page-level disclosed value is deduplicated by round, and the empty state explains missing evidence rather than suggesting filters are the only cause.
 
 Remaining data-integrity risk: `round_participants` has a unique constraint on `(round_id, fund_id, fund_vehicle_id)`, but `fund_vehicle_id` can be null. PostgreSQL allows multiple nulls in a standard unique constraint, so repeated extraction may create duplicate firm-level participant rows. Resolve this with a reviewed migration and duplicate audit before automating extraction.
+
+## Local pipeline repair (2026-10-05)
+
+- Story clustering now looks up company and fund catalogs once per batch, links exact-name matches, rejects ambiguous duplicate names, and persists links before acknowledging archive rows. A headline match can identify a primary company; fund matches remain `mentioned` only.
+- Funding extraction now reads the company/fund relationship in its actual object shape. It does not promote a mere fund mention into a round participant; only an explicitly classified `lead` or `participant` story association can become a participant edge.
+- Clustering still leaves every new story `unverified`. No automatic verification, role review, extraction scheduling, or production run was added. These are deliberate remaining gates, not completed pipeline stages. The nullable participant uniqueness risk above also remains open, so do not schedule extraction yet.

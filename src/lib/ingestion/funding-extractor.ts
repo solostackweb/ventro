@@ -28,13 +28,6 @@ const STAGE_MAP: Record<string, string> = {
   'safe': 'safe',
 };
 
-const ROLE_KEYWORDS: Record<string, string[]> = {
-  lead: ['led', 'leads', 'lead investor', 'led the round', 'leading the'],
-  co_lead: ['co-led', 'co-lead', 'co lead', 'co-leading'],
-  participant: ['participated', 'participates', 'invested in', 'backed', 'joined the round'],
-  mentioned: ['mentioned', 'noted', 'reported'],
-};
-
 interface FundingEvent {
   company_name: string;
   announced_date: string;
@@ -81,39 +74,8 @@ function parseAmount(text: string): { amount: number; currency: string } | null 
   return null;
 }
 
-function extractInvestorNames(text: string, knownFunds: string[]): string[] {
-  const found: string[] = [];
-  const lowerText = text.toLowerCase();
-  
-  for (const fund of knownFunds) {
-    const fundLower = fund.toLowerCase();
-    if (lowerText.includes(fundLower)) {
-      found.push(fund);
-    }
-  }
-  
-  return [...new Set(found)];
-}
-
-function classifyRole(text: string, investorName: string): string {
-  const lowerText = text.toLowerCase();
-  const investorLower = investorName.toLowerCase();
-  
-  const contextWindow = 200;
-  const idx = lowerText.indexOf(investorLower);
-  if (idx === -1) return 'undisclosed';
-  
-  const context = lowerText.slice(Math.max(0, idx - contextWindow), idx + contextWindow);
-  
-  for (const [role, keywords] of Object.entries(ROLE_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (context.includes(kw)) {
-        return role;
-      }
-    }
-  }
-  
-  return 'participant';
+function relatedName(relation: { canonical_name: string } | { canonical_name: string }[] | null): string | undefined {
+  return Array.isArray(relation) ? relation[0]?.canonical_name : relation?.canonical_name;
 }
 
 async function fetchArticleContent(url: string): Promise<string> {
@@ -203,8 +165,6 @@ export async function extractFundingEvents(): Promise<void> {
   const { data: funds } = await supabase
     .from('funds')
     .select('id, canonical_name');
-  const knownFunds = (funds || []).map(f => f.canonical_name);
-  
   // Fetch known companies for matching
   const { data: companies } = await supabase
     .from('companies')
@@ -230,7 +190,7 @@ export async function extractFundingEvents(): Promise<void> {
       verification_label,
       story_sources (source_url, publisher, published_at),
       story_companies (company_id, companies!inner (canonical_name)),
-      story_investors (fund_id, funds!inner (canonical_name))
+      story_investors (fund_id, role, funds!inner (canonical_name))
     `)
     .eq('event_type', 'funding')
     .in('verification_label', ['verified', 'partial'])
@@ -258,26 +218,15 @@ export async function extractFundingEvents(): Promise<void> {
     ])];
     
     // Match companies
-    const companyNames = (story.story_companies || []).map((sc: any) => sc.companies?.[0]?.canonical_name).filter(Boolean);
+    const companyNames = (story.story_companies || []).map((sc: any) => relatedName(sc.companies)).filter(Boolean);
     const companyName = companyNames[0] || 'Unknown';
     
-    // Match investors from text + known investors
-    const investorNames = extractInvestorNames(fullText, knownFunds);
-    const storyInvestors = (story.story_investors || []).map((si: any) => si.funds?.[0]?.canonical_name).filter(Boolean);
-    const allInvestors = [...new Set([...investorNames, ...storyInvestors])];
-    
-    // Classify roles
-    const leadInvestors: string[] = [];
-    const participantInvestors: string[] = [];
-    
-    for (const investor of allInvestors) {
-      const role = classifyRole(fullText, investor);
-      if (role === 'lead' || role === 'co_lead') {
-        leadInvestors.push(investor);
-      } else {
-        participantInvestors.push(investor);
-      }
-    }
+    // A name mention is not evidence of participation in this particular round.
+    const storyInvestors = story.story_investors || [];
+    const leadInvestors = storyInvestors.filter((si: any) => si.role === 'lead')
+      .map((si: any) => relatedName(si.funds)).filter(Boolean) as string[];
+    const participantInvestors = storyInvestors.filter((si: any) => si.role === 'participant')
+      .map((si: any) => relatedName(si.funds)).filter(Boolean) as string[];
     
     // Parse amount
     const amountInfo = parseAmount(fullText);
