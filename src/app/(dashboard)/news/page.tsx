@@ -277,6 +277,13 @@ export default function NewsPage() {
                 <article key={story.id} className="group">
                   <Card className="overflow-hidden transition-shadow hover:shadow-md">
                     <CardContent className="p-4 sm:p-5">
+                      {story.image_url && (
+                        <Link href={`/news/${story.id}`} className="mb-4 block overflow-hidden rounded-lg bg-bg-tertiary">
+                          {/* Feed-provided image hosts are not a fixed Next Image allowlist. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={story.image_url} alt="" loading="lazy" className="h-48 w-full object-cover sm:h-60" />
+                        </Link>
+                      )}
                       {/* Header row */}
                       <div className="flex flex-wrap items-center gap-2 mb-3">
                         {story.ai_topics.slice(0, 2).map((topic) => (
@@ -296,9 +303,18 @@ export default function NewsPage() {
                       </Link>
 
                       {/* Summary */}
-                      <p className="text-text-secondary text-sm mb-3 line-clamp-2">
-                        {story.summary}
-                      </p>
+                      <div className="mb-3">
+                        <span className="text-xs text-text-muted">
+                          {story.summary_kind === 'article_summary' ? 'Article summary' : 'Source excerpt'}
+                        </span>
+                        <p className="text-text-secondary text-sm line-clamp-3">
+                          {story.summary || 'No excerpt available from this source.'}
+                        </p>
+                        <a href={story.canonical_url} target="_blank" rel="noopener noreferrer"
+                          className="mt-2 inline-block text-sm text-accent-blue hover:underline">
+                          Read original at {story.publisher || 'source'} ↗
+                        </a>
+                      </div>
 
                       {/* Entities row */}
                       <div className="flex flex-wrap items-center gap-2 text-sm text-text-muted mb-3">

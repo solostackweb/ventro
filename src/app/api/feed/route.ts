@@ -28,6 +28,8 @@ export async function GET(request: NextRequest) {
         content_hash,
         headline,
         summary,
+        summary_kind,
+        image_url,
         event_date,
         publisher,
         source_count,

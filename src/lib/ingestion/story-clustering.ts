@@ -38,6 +38,8 @@ interface ClusteredStory {
   content_hash: string;
   headline: string;
   summary: string;
+  summary_kind: 'none' | 'source_excerpt' | 'article_summary';
+  image_url: string | null;
   event_date: string | null;
   publisher: string;
   source_count: number;
@@ -205,6 +207,12 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
     }
     
     if (matchedStory) {
+      matchedStory.image_url = matchedStory.image_url || newStory.metadata.image_url || null;
+      if (!matchedStory.summary && newStory.metadata.excerpt) {
+        matchedStory.summary = newStory.metadata.excerpt;
+        matchedStory.summary_kind = 'source_excerpt';
+      }
+      matchedStory.publisher = matchedStory.publisher || newStory.metadata.publisher || '';
       // Update existing cluster
       const idx = clusters.findIndex(c => c.canonical_url === matchedStory!.canonical_url);
       if (idx >= 0) {
@@ -219,7 +227,9 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
         canonical_url: newStory.url,
         content_hash: await computeContentHash(newStory.raw_content || newStory.url),
         headline: newStory.metadata.title || '',
-        summary: newStory.raw_content || '',
+        summary: newStory.metadata.excerpt || newStory.raw_content || '',
+        summary_kind: newStory.metadata.excerpt || newStory.raw_content ? 'source_excerpt' : 'none',
+        image_url: newStory.metadata.image_url || null,
         event_date: newStory.metadata.published_at || null,
         publisher: newStory.metadata.publisher || '',
         source_count: 1,
@@ -261,6 +271,8 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
         content_hash: cluster.content_hash,
         headline: cluster.headline,
         summary: cluster.summary,
+        summary_kind: cluster.summary_kind || (cluster.summary ? 'source_excerpt' : 'none'),
+        image_url: cluster.image_url || null,
         event_date: cluster.event_date,
         publisher: cluster.publisher,
         source_count: cluster.source_count,

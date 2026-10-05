@@ -18,6 +18,7 @@ function loadFetcher(supabase, feedItems) {
       if (id === '@/lib/supabase/ingestion') return { ingestionSupabase: supabase };
       if (id === '@/lib/r2/client') return { generateR2Key: () => '', uploadToR2: async () => ({ success: true }) };
       if (id === 'rss-parser') return Parser;
+      if (id === './feed-presentation') return { presentFeedItem: () => ({ imageUrl: null, excerpt: '' }) };
       return require(id);
     },
     console,

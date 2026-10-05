@@ -3,8 +3,12 @@ import { SourceConnector, FetchResult } from '@/types';
 import Parser from 'rss-parser';
 import { uploadToR2, generateR2Key } from '@/lib/r2/client';
 import crypto from 'crypto';
+import { presentFeedItem } from './feed-presentation';
 
-const parser = new Parser();
+const parser = new Parser({ customFields: { item: [
+  ['media:content', 'media:content', { keepArray: true }],
+  'media:thumbnail',
+] } });
 
 // Feed URL mapping (in production, could be stored in source_connectors.notes or a separate table)
 // Multiple fallback URLs per source - tries each until one works
@@ -81,10 +85,11 @@ async function fetchRSS(source: SourceConnector): Promise<FetchResult[]> {
       for (const item of feed.items) {
         const url = item.link || '';
         if (!/^https?:\/\//i.test(url) || !item.title?.trim()) continue;
+        const presentation = presentFeedItem(item, source.reuse_permission);
         const content = source.reuse_permission === 'full_text'
           ? (item.content || item.contentSnippet || '')
           : source.reuse_permission === 'summary_only'
-            ? (item.contentSnippet || '')
+            ? presentation.excerpt
             : '';
         const contentHash = crypto.createHash('sha256').update(content || url).digest('hex').slice(0, 32);
 
@@ -98,6 +103,9 @@ async function fetchRSS(source: SourceConnector): Promise<FetchResult[]> {
             title: item.title,
             published_at: item.pubDate,
             author: item.creator,
+            publisher: source.name,
+            image_url: presentation.imageUrl,
+            excerpt: presentation.excerpt,
             tags: item.categories,
             language: 'en',
           },

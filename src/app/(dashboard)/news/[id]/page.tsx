@@ -204,18 +204,33 @@ export default function StoryDetailPage() {
           {/* Headline */}
           <h1 className="text-3xl font-bold text-text-primary">{story.headline}</h1>
 
+          {story.image_url && (
+            <div className="overflow-hidden rounded-xl bg-bg-tertiary">
+              {/* External feed image domains are intentionally not proxied through Next Image. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={story.image_url} alt="" className="max-h-[28rem] w-full object-cover" />
+            </div>
+          )}
+
           {/* Publisher info */}
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            {story.publisher && <><span>By {story.publisher}</span><span>•</span></>}
+            {story.publisher && <><span>Source: {story.publisher}</span><span>•</span></>}
             <span>{formatDate(story.event_date)}</span>
             {story.geography && (
               <Badge variant="blue" className="text-xs">🌍 {story.geography.toUpperCase()}</Badge>
             )}
           </div>
 
-          {/* Summary */}
+          {/* Source excerpt or independently produced article summary */}
           <div className="prose prose-invert max-w-none">
-            <p className="text-text-secondary text-lg leading-relaxed">{story.summary}</p>
+            <h2 className="text-sm font-medium text-text-muted">
+              {story.summary_kind === 'article_summary' ? 'Article summary' : 'Source excerpt'}
+            </h2>
+            <p className="text-text-secondary text-lg leading-relaxed">
+              {story.summary || 'No excerpt available from this source.'}
+            </p>
+            <a href={story.canonical_url} target="_blank" rel="noopener noreferrer"
+              className="text-sm text-accent-blue hover:underline">Read the original article ↗</a>
           </div>
 
           {/* Entities */}

@@ -284,6 +284,8 @@ export interface Story {
   content_hash: string;
   headline: string;
   summary: string;
+  summary_kind: 'none' | 'source_excerpt' | 'article_summary';
+  image_url: string | null;
   event_date: string | null;
   publisher: string;
   source_count: number;
@@ -341,6 +343,9 @@ export interface FetchResult {
     title?: string;
     published_at?: string;
     author?: string;
+    publisher?: string;
+    image_url?: string | null;
+    excerpt?: string;
     tags?: string[];
     language?: string;
   };

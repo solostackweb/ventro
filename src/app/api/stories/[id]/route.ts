@@ -20,6 +20,8 @@ export async function GET(
         content_hash,
         headline,
         summary,
+        summary_kind,
+        image_url,
         event_date,
         publisher,
         source_count,
