@@ -1,5 +1,4 @@
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
-import type { Story } from '@/types';
 import { JSDOM } from 'jsdom';
 
 const STAGE_MAP: Record<string, string> = {
@@ -38,7 +37,14 @@ interface FundingEvent {
   participant_investors: string[];
   source_urls: string[];
   verification_status: 'verified' | 'partial' | 'unverified' | 'conflicted';
-  conflicts: any[];
+  conflicts: RoundConflict[];
+}
+
+interface RoundConflict {
+  field: string;
+  source_a: string;
+  source_b: string;
+  values: unknown;
 }
 
 function normalizeStage(stage: string): string {
@@ -61,8 +67,10 @@ function parseAmount(text: string): { amount: number; currency: string } | null 
     const match = text.match(pattern);
     if (match) {
       let value = parseFloat(match[1].replace(/,/g, ''));
-      if (pattern.source.includes('million|M|m') || pattern.source.includes('billion|B|b')) {
-        if (pattern.source.includes('billion|B|b')) {
+      const isMillion = pattern.source.includes('million|M|m');
+      const isBillion = pattern.source.includes('billion|B|b');
+      if (isMillion || isBillion) {
+        if (isBillion) {
           value *= 1_000_000_000;
         } else {
           value *= 1_000_000;
@@ -74,7 +82,7 @@ function parseAmount(text: string): { amount: number; currency: string } | null 
   return null;
 }
 
-function relatedName(relation: { canonical_name: string } | { canonical_name: string }[] | null): string | undefined {
+function relatedName(relation: { canonical_name: string } | { canonical_name: string }[] | null | undefined): string | undefined {
   return Array.isArray(relation) ? relation[0]?.canonical_name : relation?.canonical_name;
 }
 
@@ -87,25 +95,25 @@ async function fetchArticleContent(url: string): Promise<string> {
       },
       signal: AbortSignal.timeout(15000),
     });
-    
+
     if (!response.ok) return '';
-    
+
     const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
-    
+
     // Try to find article content
-    const article = document.querySelector('article') || 
+    const article = document.querySelector('article') ||
                     document.querySelector('[role="article"]') ||
                     document.querySelector('.post-content') ||
                     document.querySelector('.entry-content') ||
                     document.querySelector('.article-body') ||
                     document.querySelector('main');
-    
+
     if (article) {
       return article.textContent || '';
     }
-    
+
     // Fallback: get all paragraph text
     const paragraphs = document.querySelectorAll('p');
     return Array.from(paragraphs).map(p => p.textContent).join('\n');
@@ -114,18 +122,18 @@ async function fetchArticleContent(url: string): Promise<string> {
   }
 }
 
-function detectConflicts(events: FundingEvent[]): any[] {
-  const conflicts: any[] = [];
-  
+function detectConflicts(events: FundingEvent[]): RoundConflict[] {
+  const conflicts: RoundConflict[] = [];
+
   for (let i = 0; i < events.length; i++) {
     for (let j = i + 1; j < events.length; j++) {
       const a = events[i];
       const b = events[j];
-      
+
       if (a.company_name.toLowerCase() === b.company_name.toLowerCase() &&
           a.announced_date === b.announced_date &&
           a.round_stage === b.round_stage) {
-        
+
         if (a.amount_usd !== b.amount_usd && a.amount_usd && b.amount_usd) {
           conflicts.push({
             field: 'amount_usd',
@@ -134,15 +142,15 @@ function detectConflicts(events: FundingEvent[]): any[] {
             values: [a.amount_usd, b.amount_usd],
           });
         }
-        
+
         const allInvestorsA = [...a.lead_investors, ...a.participant_investors];
         const allInvestorsB = [...b.lead_investors, ...b.participant_investors];
         const setA = new Set(allInvestorsA.map(x => x.toLowerCase()));
         const setB = new Set(allInvestorsB.map(x => x.toLowerCase()));
-        
+
         const diffA = [...setA].filter(x => !setB.has(x));
         const diffB = [...setB].filter(x => !setA.has(x));
-        
+
         if (diffA.length > 0 || diffB.length > 0) {
           conflicts.push({
             field: 'investors',
@@ -154,13 +162,13 @@ function detectConflicts(events: FundingEvent[]): any[] {
       }
     }
   }
-  
+
   return conflicts;
 }
 
 export async function extractFundingEvents(): Promise<void> {
   const supabase = ingestionSupabase;
-  
+
   // Fetch known funds for matching
   const { data: funds } = await supabase
     .from('funds')
@@ -176,7 +184,7 @@ export async function extractFundingEvents(): Promise<void> {
       knownCompanies.set(c.canonical_domain.toLowerCase(), c.id);
     }
   }
-  
+
   // Fetch verified stories with funding event type
   const { data: stories } = await supabase
     .from('stories')
@@ -196,45 +204,45 @@ export async function extractFundingEvents(): Promise<void> {
     .in('verification_label', ['verified', 'partial'])
     .order('event_date', { ascending: false })
     .limit(200);
-  
+
   if (!stories?.length) {
     console.log('No funding stories found');
     return;
   }
-  
+
   const extractedEvents: FundingEvent[] = [];
-  
+
   for (const story of stories) {
     const baseText = `${story.headline} ${story.summary}`.toLowerCase();
-    
+
     // Fetch full article content from first source for funded events
     const firstSourceUrl = story.source_urls?.[0] || (story.story_sources?.[0]?.source_url);
     const articleContent = firstSourceUrl ? await fetchArticleContent(firstSourceUrl) : '';
     const fullText = `${baseText} ${articleContent.toLowerCase()}`;
-    
+
     const allUrls = [...new Set([
       ...story.source_urls || [],
       ...(story.story_sources || []).map(s => s.source_url).filter(Boolean)
     ])];
-    
+
     // Match companies
-    const companyNames = (story.story_companies || []).map((sc: any) => relatedName(sc.companies)).filter(Boolean);
+    const companyNames = (story.story_companies || []).map((sc: { companies?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(sc.companies)).filter(Boolean);
     const companyName = companyNames[0] || 'Unknown';
-    
+
     // A name mention is not evidence of participation in this particular round.
     const storyInvestors = story.story_investors || [];
-    const leadInvestors = storyInvestors.filter((si: any) => si.role === 'lead')
-      .map((si: any) => relatedName(si.funds)).filter(Boolean) as string[];
-    const participantInvestors = storyInvestors.filter((si: any) => si.role === 'participant')
-      .map((si: any) => relatedName(si.funds)).filter(Boolean) as string[];
-    
+    const leadInvestors = storyInvestors.filter((si: { role: string; funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => si.role === 'lead')
+      .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
+    const participantInvestors = storyInvestors.filter((si: { role: string }) => si.role === 'participant')
+      .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
+
     // Parse amount
     const amountInfo = parseAmount(fullText);
-    
+
     // Normalize stage
     const stageMatch = fullText.match(/(pre-?seed|seed|series [a-e]|growth|late.?stage|ipo|public|acquisition|grant|debt|convertible|safe)/i);
     const roundStage = stageMatch ? normalizeStage(stageMatch[1]) : 'other';
-    
+
     const event: FundingEvent = {
       company_name: companyName,
       announced_date: story.event_date || new Date().toISOString(),
@@ -247,10 +255,10 @@ export async function extractFundingEvents(): Promise<void> {
       verification_status: story.verification_label === 'verified' ? 'verified' : 'partial',
       conflicts: [],
     };
-    
+
     extractedEvents.push(event);
   }
-  
+
   // Detect conflicts
   const conflicts = detectConflicts(extractedEvents);
   for (const conflict of conflicts) {
@@ -262,7 +270,7 @@ export async function extractFundingEvents(): Promise<void> {
       }
     }
   }
-  
+
   // Upsert funding rounds and participants
   for (const event of extractedEvents) {
     const companyId = knownCompanies.get(event.company_name.toLowerCase());
@@ -270,7 +278,7 @@ export async function extractFundingEvents(): Promise<void> {
       console.log(`Company not found: ${event.company_name}`);
       continue;
     }
-    
+
     // Upsert funding round
     const { data: round, error: roundError } = await supabase
       .from('funding_rounds')
@@ -288,23 +296,23 @@ export async function extractFundingEvents(): Promise<void> {
       }, { onConflict: 'company_id,announced_date,round_stage' })
       .select()
       .single();
-    
+
     if (roundError) {
       console.error('Failed to upsert round:', roundError.message);
       continue;
     }
-    
+
     // Upsert participants
     const allInvestors = [...event.lead_investors, ...event.participant_investors];
     const leadInvestorIds: string[] = [];
-    
+
     for (const investorName of allInvestors) {
       const fund = funds?.find(f => f.canonical_name === investorName);
       if (!fund) continue;
-      
+
       const role = event.lead_investors.includes(investorName) ? 'lead' : 'participant';
       if (role === 'lead') leadInvestorIds.push(fund.id);
-      
+
       await supabase
         .from('round_participants')
         .upsert({
@@ -315,14 +323,14 @@ export async function extractFundingEvents(): Promise<void> {
           verification_status: event.verification_status,
         }, { onConflict: 'round_id,fund_id,fund_vehicle_id' });
     }
-    
+
     // Update round with lead investor IDs
     await supabase
       .from('funding_rounds')
       .update({ lead_investor_ids: leadInvestorIds })
       .eq('id', round.id);
   }
-  
+
   console.log(`Extracted ${extractedEvents.length} funding events, ${conflicts.length} conflicts`);
 }
 

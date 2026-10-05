@@ -10,12 +10,30 @@ interface PatternCandidate {
   change_percentage: number;
   distinct_companies: number;
   distinct_funds: number;
-  qualifying_events: any[];
-  counterexamples: any[];
+  qualifying_events: QualifyingEvent[];
+  counterexamples: Counterexample[];
   confidence: 'high' | 'medium' | 'low';
   coverage_notes: string;
   status: 'candidate' | 'published' | 'corrected' | 'retired' | 'rejected';
   source_links: string[];
+}
+
+interface QualifyingEvent {
+  date: string;
+  company_id: string;
+  company_name: string;
+  round_stage: string | null;
+  amount_usd: number | null;
+  fund_ids: string[];
+  fund_names: string[];
+  source_url: string;
+}
+
+interface Counterexample {
+  entity_id: string;
+  entity_name: string;
+  entity_type: 'company' | 'fund';
+  reason: string;
 }
 
 interface RoundEvent {
@@ -37,25 +55,6 @@ interface RoundEvent {
   round_sources: string[];
 }
 
-function calculateBaseline(events: RoundEvent[], windowMonths: number, theme?: string): number {
-  if (events.length < 2) return 0;
-  
-  // Sort by date
-  const sorted = [...events].sort((a, b) => new Date(a.announced_date).getTime() - new Date(b.announced_date).getTime());
-  
-  // Split into two halves for baseline comparison
-  const mid = Math.floor(sorted.length / 2);
-  const firstHalf = sorted.slice(0, mid);
-  const secondHalf = sorted.slice(mid);
-  
-  const firstHalfCount = firstHalf.length;
-  const secondHalfCount = secondHalf.length;
-  
-  if (firstHalfCount === 0) return 0;
-  
-  return secondHalfCount / firstHalfCount;
-}
-
 function detectFundingSurge(
   events: RoundEvent[],
   theme?: string,
@@ -65,15 +64,15 @@ function detectFundingSurge(
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowMonths * 30 * 24 * 60 * 60 * 1000);
   const windowEnd = new Date();
-  
+
   // Filter events in window
   const windowEvents = events.filter(e => {
     const eventDate = new Date(e.announced_date);
     return eventDate >= windowStart && eventDate <= windowEnd;
   });
-  
+
   if (windowEvents.length < 5) return patterns;
-  
+
   // Group by theme
   const themeGroups: Record<string, RoundEvent[]> = {};
   for (const event of windowEvents) {
@@ -83,42 +82,42 @@ function detectFundingSurge(
       themeGroups[tag].push(event);
     }
   }
-  
+
   for (const [theme, themeEvents] of Object.entries(themeGroups)) {
     if (themeEvents.length < 3) continue;
-    
+
     // Calculate baseline from previous period
     const prevWindowStart = new Date(windowStart.getTime() - windowMonths * 30 * 24 * 60 * 60 * 1000);
     const prevEvents = events.filter(e => {
       const eventDate = new Date(e.announced_date);
       return eventDate >= prevWindowStart && eventDate < windowStart;
     });
-    
-    const prevThemeEvents = prevEvents.filter(e => 
+
+    const prevThemeEvents = prevEvents.filter(e =>
       (e.company_ai_tags || []).includes(theme)
     );
-    
+
     const baselineCount = prevThemeEvents.length;
     const currentCount = themeEvents.length;
-    
+
     if (baselineCount === 0 && currentCount < 5) continue;
     if (baselineCount === 0) {
       // New theme emergence
       if (currentCount >= 5) {
         const companies = new Set(themeEvents.map(e => e.company_id));
         const funds = new Set(themeEvents.map(e => e.fund_id));
-        
+
         // Find counterexamples (non-theme events that could be confused)
-        const otherThemeEvents = windowEvents.filter(e => 
+        const otherThemeEvents = windowEvents.filter(e =>
           !(e.company_ai_tags || []).includes(theme)
         );
-        const counterexamples = otherThemeEvents.slice(0, 5).map(e => ({
+        const counterexamples: Counterexample[] = otherThemeEvents.slice(0, 5).map(e => ({
           entity_id: e.company_id,
           entity_name: e.company_name,
           entity_type: 'company' as const,
           reason: `Non-${theme} company raised in same window`,
         }));
-        
+
         patterns.push({
           name: `${theme.replace('_', ' ')} Surge`,
           description: `Unusual spike in ${theme.replace('_', ' ')} funding activity with ${currentCount} deals vs ${baselineCount} baseline`,
@@ -127,8 +126,8 @@ function detectFundingSurge(
           baseline_value: baselineCount,
           current_value: currentCount,
           change_percentage: baselineCount > 0 ? ((currentCount - baselineCount) / baselineCount) * 100 : 100,
-          distinct_companies: new Set(themeEvents.map(e => e.company_id)).size,
-          distinct_funds: new Set(themeEvents.map(e => e.fund_id)).size,
+          distinct_companies: companies.size,
+          distinct_funds: funds.size,
           qualifying_events: themeEvents.map(e => ({
             date: e.announced_date,
             company_id: e.company_id,
@@ -148,21 +147,21 @@ function detectFundingSurge(
       }
     } else {
       const changePct = ((currentCount - baselineCount) / baselineCount) * 100;
-      
+
       if (changePct >= 50) { // 50% increase threshold
         const companies = new Set(themeEvents.map(e => e.company_id));
         const funds = new Set(themeEvents.map(e => e.fund_id));
-        
-        const otherThemeEvents = windowEvents.filter(e => 
+
+        const otherThemeEvents = windowEvents.filter(e =>
           !(e.company_ai_tags || []).includes(theme)
         );
-        const counterexamples = otherThemeEvents.slice(0, 5).map(e => ({
+        const counterexamples: Counterexample[] = otherThemeEvents.slice(0, 5).map(e => ({
           entity_id: e.company_id,
           entity_name: e.company_name,
           entity_type: 'company' as const,
           reason: `Non-${theme} company raised in same window`,
         }));
-        
+
         patterns.push({
           name: `${theme.replace('_', ' ')} Acceleration`,
           description: `${theme.replace('_', ' ')} funding accelerated ${changePct.toFixed(0)}% (${currentCount} deals vs ${baselineCount} baseline)`,
@@ -171,8 +170,8 @@ function detectFundingSurge(
           baseline_value: baselineCount,
           current_value: currentCount,
           change_percentage: changePct,
-          distinct_companies: new Set(themeEvents.map(e => e.company_id)).size,
-          distinct_funds: new Set(themeEvents.map(e => e.fund_id)).size,
+          distinct_companies: companies.size,
+          distinct_funds: funds.size,
           qualifying_events: themeEvents.map(e => ({
             date: e.announced_date,
             company_id: e.company_id,
@@ -192,7 +191,7 @@ function detectFundingSurge(
       }
     }
   }
-  
+
   return patterns;
 }
 
@@ -204,14 +203,14 @@ function detectInvestorConcentration(
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowMonths * 30 * 24 * 60 * 60 * 1000);
   const windowEnd = new Date();
-  
+
   const windowEvents = events.filter(e => {
     const eventDate = new Date(e.announced_date);
     return eventDate >= windowStart && eventDate <= windowEnd;
   });
-  
+
   if (windowEvents.length < 10) return patterns;
-  
+
   // Count deals per fund
   const fundCounts: Record<string, { count: number; name: string; events: RoundEvent[] }> = {};
   for (const event of windowEvents) {
@@ -221,20 +220,20 @@ function detectInvestorConcentration(
     fundCounts[event.fund_id].count++;
     fundCounts[event.fund_id].events.push(event);
   }
-  
+
   // Find top funds with unusual activity
   const sortedFunds = Object.entries(fundCounts)
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 5);
-  
+
   const totalDeals = windowEvents.length;
   const avgDeals = totalDeals / Object.keys(fundCounts).length;
-  
+
   for (const [fundId, data] of sortedFunds) {
     if (data.count >= Math.max(5, avgDeals * 2)) {
       const baselineCount = 0; // Would need historical data
       const currentCount = data.count;
-      
+
       patterns.push({
         name: `${data.name} Activity Spike`,
         description: `${data.name} participated in ${currentCount} deals (${(currentCount / totalDeals * 100).toFixed(1)}% of all deals)`,
@@ -263,7 +262,7 @@ function detectInvestorConcentration(
       });
     }
   }
-  
+
   return patterns;
 }
 
@@ -275,12 +274,12 @@ function detectStageShift(
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowMonths * 30 * 24 * 60 * 60 * 1000);
   const windowEnd = new Date();
-  
+
   const windowEvents = events.filter(e => {
     const eventDate = new Date(e.announced_date);
     return eventDate >= windowStart && eventDate <= windowEnd;
   });
-  
+
   // Group by stage
   const stageGroups: Record<string, RoundEvent[]> = {};
   for (const event of windowEvents) {
@@ -288,30 +287,30 @@ function detectStageShift(
     if (!stageGroups[stage]) stageGroups[stage] = [];
     stageGroups[stage].push(event);
   }
-  
+
   for (const [stage, stageEvents] of Object.entries(stageGroups)) {
     if (stageEvents.length < 5) continue;
-    
+
     const companies = new Set(stageEvents.map(e => e.company_id));
     const funds = new Set(stageEvents.map(e => e.fund_id));
-    
+
     // Compare to previous period
     const prevWindowStart = new Date(windowStart.getTime() - windowMonths * 30 * 24 * 60 * 60 * 1000);
     const prevEvents = events.filter(e => {
       const eventDate = new Date(e.announced_date);
       return eventDate >= prevWindowStart && eventDate < windowStart && e.round_stage === stage;
     });
-    
+
     const baselineCount = prevEvents.length;
     const currentCount = stageEvents.length;
-    
+
     if (baselineCount === 0) continue;
-    
+
     const changePct = ((currentCount - baselineCount) / baselineCount) * 100;
-    
+
     if (Math.abs(changePct) >= 50) {
       const direction = changePct > 0 ? 'Surge' : 'Decline';
-      
+
       patterns.push({
         name: `${stage.replace('_', ' ')} ${direction}`,
         description: `${stage.replace('_', ' ')} deals ${direction.toLowerCase()} ${Math.abs(changePct).toFixed(0)}% (${currentCount} vs ${baselineCount})`,
@@ -320,8 +319,8 @@ function detectStageShift(
         baseline_value: baselineCount,
         current_value: currentCount,
         change_percentage: changePct,
-        distinct_companies: new Set(stageEvents.map(e => e.company_id)).size,
-        distinct_funds: new Set(stageEvents.map(e => e.fund_id)).size,
+        distinct_companies: companies.size,
+        distinct_funds: funds.size,
         qualifying_events: stageEvents.map(e => ({
           date: e.announced_date,
           company_id: e.company_id,
@@ -340,13 +339,13 @@ function detectStageShift(
       });
     }
   }
-  
+
   return patterns;
 }
 
 export async function detectPatterns(): Promise<void> {
   const supabase = ingestionSupabase;
-  
+
   // Get verified rounds from investment_graph
   const { data: events, error } = await supabase
     .from('investment_graph')
@@ -354,27 +353,27 @@ export async function detectPatterns(): Promise<void> {
     .eq('round_verification', 'verified')
     .eq('participant_verification', 'verified')
     .order('announced_date', { ascending: false });
-  
+
   if (error || !events?.length) {
     console.log('No verified events for pattern detection');
     return;
   }
-  
+
   console.log(`Analyzing ${events.length} verified events for patterns...`);
-  
+
   const allPatterns: PatternCandidate[] = [];
-  
+
   // Run different pattern detectors
   allPatterns.push(...detectFundingSurge(events, undefined, 12));
   allPatterns.push(...detectInvestorConcentration(events, 12));
   allPatterns.push(...detectStageShift(events, 12));
-  
+
   // Also check 6-month window
   allPatterns.push(...detectFundingSurge(events, undefined, 6));
   allPatterns.push(...detectStageShift(events, 6));
-  
+
   console.log(`Detected ${allPatterns.length} pattern candidates`);
-  
+
   // Upsert patterns
   for (const pattern of allPatterns) {
     const { error } = await supabase
@@ -396,12 +395,12 @@ export async function detectPatterns(): Promise<void> {
         status: pattern.status,
         source_links: pattern.source_links,
       }, { onConflict: 'name,time_window_start,time_window_end' });
-    
+
     if (error) {
       console.error(`Failed to upsert pattern ${pattern.name}:`, error.message);
     }
   }
-  
+
   console.log(`Upserted ${allPatterns.length} patterns`);
 }
 

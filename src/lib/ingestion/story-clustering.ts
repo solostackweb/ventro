@@ -1,10 +1,6 @@
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
-import { SourceConnector, FetchResult } from '@/types';
+import { FetchResult } from '@/types';
 import crypto from 'crypto';
-
-// Similarity threshold for content deduplication
-const CONTENT_SIMILARITY_THRESHOLD = 0.85;
-const TITLE_SIMILARITY_THRESHOLD = 0.9;
 
 const EVENT_TYPE_KEYWORDS: Record<string, string[]> = {
   funding: ['raises', 'raised', 'funding', 'round', 'series', 'investment', 'investors', 'venture', 'capital', 'valuation', 'pre-seed', 'seed', 'series a', 'series b', 'series c', 'growth round', 'led by', 'backs', 'backed', 'invests', 'financing', 'closes'],
@@ -18,7 +14,7 @@ function classifyEventType(text: string): string {
   const lower = text.toLowerCase();
   let bestType = 'other';
   let bestScore = 0;
-  
+
   for (const [type, keywords] of Object.entries(EVENT_TYPE_KEYWORDS)) {
     let score = 0;
     for (const kw of keywords) {
@@ -29,7 +25,7 @@ function classifyEventType(text: string): string {
       bestType = type;
     }
   }
-  
+
   return bestType;
 }
 
@@ -43,8 +39,8 @@ interface ClusteredStory {
   event_date: string | null;
   publisher: string;
   source_count: number;
-  companies: any[];
-  investors: any[];
+  companies: Array<{ company_id: string; role: 'primary' | 'mentioned' }>;
+  investors: Array<{ fund_id: string; role: 'mentioned' }>;
   ai_topics: string[];
   geography: string | null;
   event_type: string;
@@ -109,10 +105,10 @@ async function computeContentHash(content: string): Promise<string> {
 function calculateTitleSimilarity(title1: string, title2: string): number {
   const words1 = new Set(title1.toLowerCase().split(/\s+/).filter(w => w.length > 2));
   const words2 = new Set(title2.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-  
+
   const intersection = new Set([...words1].filter(w => words2.has(w)));
   const union = new Set([...words1, ...words2]);
-  
+
   return union.size > 0 ? intersection.size / union.size : 0;
 }
 
@@ -120,27 +116,27 @@ function calculateContentSimilarity(content1: string, content2: string): number 
   // Simple Jaccard similarity on word trigrams
   const trigrams1 = new Set<string>();
   const trigrams2 = new Set<string>();
-  
+
   const words1 = content1.toLowerCase().split(/\s+/);
   const words2 = content2.toLowerCase().split(/\s+/);
-  
+
   for (let i = 0; i < words1.length - 2; i++) {
     trigrams1.add(words1.slice(i, i + 3).join(' '));
   }
   for (let i = 0; i < words2.length - 2; i++) {
     trigrams2.add(words2.slice(i, i + 3).join(' '));
   }
-  
+
   const intersection = new Set([...trigrams1].filter(t => trigrams2.has(t)));
   const union = new Set([...trigrams1, ...trigrams2]);
-  
+
   return union.size > 0 ? intersection.size / union.size : 0;
 }
 
-export async function clusterStories(newStories: any[], entities: EntityCatalog = { companies: [], funds: [] }): Promise<any[]> {
+export async function clusterStories(newStories: FetchResult[], entities: EntityCatalog = { companies: [], funds: [] }): Promise<ClusteredStory[]> {
   const supabase = ingestionSupabase;
-  const clusters: any[] = [];
-  
+  const clusters: ClusteredStory[] = [];
+
   // Fetch existing stories for deduplication
   const { data: existingStories, error: existingError } = await supabase
     .from('stories')
@@ -148,14 +144,14 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
     .order('created_at', { ascending: false })
     .limit(1000);
   if (existingError) throw new Error(`Story lookup failed: ${existingError.message}`);
-  
-  const existingMap = new Map<string, any>();
+
+  const existingMap = new Map<string, ClusteredStory>();
   for (const story of existingStories || []) {
-    existingMap.set(story.canonical_url, story);
+    existingMap.set(story.canonical_url, story as ClusteredStory);
   }
-  
+
   for (const newStory of newStories) {
-    let matchedStory: any = null;
+    let matchedStory: ClusteredStory | null = null;
     let bestSimilarity = 0;
 
     const sameUrl = clusters.find(c => c.canonical_url === newStory.url)
@@ -169,14 +165,14 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
       matchedStory.source_count = matchedStory.source_urls.length;
       bestSimilarity = 1;
     }
-    
+
     // Check against existing stories
     for (const existing of existingMap.values()) {
       const titleSim = calculateTitleSimilarity(newStory.metadata.title || '', existing.headline || '');
       const contentSim = calculateContentSimilarity(newStory.raw_content || '', existing.summary || '');
-      
+
       const combinedSim = (titleSim * 0.6) + (contentSim * 0.4);
-      
+
       if (combinedSim > bestSimilarity && combinedSim > 0.9) {
         bestSimilarity = combinedSim;
         matchedStory = {
@@ -187,14 +183,14 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
         matchedStory.source_count = matchedStory.source_urls.length;
       }
     }
-    
+
     // Check against other new stories in this batch
     for (const cluster of clusters) {
       const titleSim = calculateTitleSimilarity(newStory.metadata.title || '', cluster.headline || '');
       const contentSim = calculateContentSimilarity(newStory.raw_content || '', cluster.summary || '');
-      
+
       const combinedSim = (titleSim * 0.6) + (contentSim * 0.4);
-      
+
       if (combinedSim > bestSimilarity && combinedSim > 0.9) {
         bestSimilarity = combinedSim;
         matchedStory = {
@@ -205,7 +201,7 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
         matchedStory.source_count = matchedStory.source_urls.length;
       }
     }
-    
+
     if (matchedStory) {
       matchedStory.image_url = matchedStory.image_url || newStory.metadata.image_url || null;
       if (!matchedStory.summary && newStory.metadata.excerpt) {
@@ -255,13 +251,13 @@ export async function clusterStories(newStories: any[], entities: EntityCatalog 
     }));
     cluster.investors = fundMatches.map(fund => ({ fund_id: fund.id, role: 'mentioned' }));
   }
-  
+
   return clusters;
 }
 
-async function saveClusteredStories(clusters: any[]): Promise<void> {
+async function saveClusteredStories(clusters: ClusteredStory[]): Promise<void> {
   const supabase = ingestionSupabase;
-  
+
   for (const cluster of clusters) {
     // Upsert story
     const { data: story, error } = await supabase
@@ -287,11 +283,11 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
       }, { onConflict: 'canonical_url' })
       .select()
       .single();
-    
+
     if (error || !story) throw new Error(`Story upsert failed: ${error?.message || 'no row returned'}`);
-    
+
     // Link companies
-    for (const company of Array.isArray(cluster.companies) ? cluster.companies : []) {
+    for (const company of cluster.companies) {
       const { error: linkError } = await supabase
         .from('story_companies')
         .upsert({
@@ -301,9 +297,9 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
         }, { onConflict: 'story_id,company_id' });
       if (linkError) throw new Error(`Story company link failed: ${linkError.message}`);
     }
-    
+
     // Link investors
-    for (const investor of Array.isArray(cluster.investors) ? cluster.investors : []) {
+    for (const investor of cluster.investors) {
       const { error: linkError } = await supabase
         .from('story_investors')
         .upsert({
@@ -313,7 +309,7 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
         }, { onConflict: 'story_id,fund_id' });
       if (linkError) throw new Error(`Story investor link failed: ${linkError.message}`);
     }
-    
+
     // Store source URLs
     for (const url of cluster.source_urls) {
       const { error: linkError } = await supabase
@@ -329,22 +325,22 @@ async function saveClusteredStories(clusters: any[]): Promise<void> {
 
 export async function runStoryClustering(): Promise<number> {
   const supabase = ingestionSupabase;
-  
+
   // Fetch unprocessed items from source_archive
   const { data: archiveItems, error } = await supabase
     .from('source_archive')
     .select('*')
     .eq('processed', false)
     .limit(100);
-  
+
   if (error) throw new Error(`Archive read failed: ${error.message}`);
   if (!archiveItems?.length) {
     console.log('No unprocessed archive items found');
     return 0;
   }
-  
+
   // Convert to FetchResult format
-  const newStories = archiveItems.map(item => ({
+  const newStories: FetchResult[] = archiveItems.map(item => ({
     source_id: item.source_id,
     url: item.url,
     fetched_at: item.fetched_at,
@@ -353,13 +349,13 @@ export async function runStoryClustering(): Promise<number> {
     metadata: item.metadata,
     permissions: item.permissions,
   }));
-  
+
   // Cluster stories
   const [companies, funds] = await Promise.all([
     loadNamedEntities('companies'), loadNamedEntities('funds'),
   ]);
   const clusters = await clusterStories(newStories, { companies, funds });
-  
+
   // Save clustered stories
   await saveClusteredStories(clusters);
 
@@ -369,7 +365,7 @@ export async function runStoryClustering(): Promise<number> {
     .update({ processed: true })
     .in('id', archiveItems.map(i => i.id));
   if (updateError) throw new Error(`Archive acknowledgement failed: ${updateError.message}`);
-  
+
   console.log(`Clustered ${newStories.length} items into ${clusters.length} stories`);
   return newStories.length;
 }

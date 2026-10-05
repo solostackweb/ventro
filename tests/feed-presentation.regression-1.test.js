@@ -7,9 +7,9 @@ function loadPresentation() {
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
-  const module = { exports: {} };
-  new Function('exports', 'module', compiled)(module.exports, module);
-  return module.exports;
+  const mod = { exports: {} };
+  new Function('exports', 'module', compiled)(mod.exports, mod);
+  return mod.exports;
 }
 
 // Regression: ISSUE-004 — feeds discarded available image and readable excerpt metadata.
