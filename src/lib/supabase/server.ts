@@ -50,13 +50,33 @@ export async function getProfile(userId: string) {
   return data;
 }
 
-export async function getEntitlement(userId: string): Promise<'preview' | 'discount_card' | 'subscribed'> {
+/**
+ * Centralized expiry-aware access check.
+ * Returns true only for active subscribed or non-expired student_trial.
+ * Delegates to the database function for authoritative evaluation.
+ * Derives identity from auth.uid() - no user_id parameter.
+ */
+export async function hasFullAccess(): Promise<boolean> {
+  const supabase = await createServerClient();
+  const { data, error } = await supabase.rpc('has_full_access');
+  if (error) {
+    console.error('has_full_access RPC error:', error);
+    return false;
+  }
+  return data === true;
+}
+
+/**
+ * Get entitlement with expiry awareness for display purposes.
+ * Still uses profile read for UI, but full access decisions should use hasFullAccess().
+ */
+export async function getEntitlement(userId: string): Promise<'preview' | 'student_trial' | 'subscribed'> {
   const profile = await getProfile(userId);
   if (!profile) return 'preview';
   
-  // Check if discount card is expired
-  if (profile.entitlement === 'discount_card' && profile.discount_card_expires_at) {
-    const expiresAt = new Date(profile.discount_card_expires_at);
+  // Check if student trial is expired
+  if (profile.entitlement === 'student_trial' && profile.trial_expires_at) {
+    const expiresAt = new Date(profile.trial_expires_at);
     if (expiresAt < new Date()) {
       return 'preview';
     }

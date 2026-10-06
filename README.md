@@ -18,7 +18,7 @@ Ventro is a web application that tracks AI companies and AI-focused investors wo
 - **Personalized Workspace** — Follow funds/companies, set AI topics/geographies/stages, save patterns, configure alerts
 - **Evidence-Backed Patterns** — Qualifying events, baseline, counterexamples, confidence, admin review gate
 - **Community Discussion** — Threaded discussions on entities, private notes, moderation
-- **Masters' Union Student Access** — 10-day full access via verified `@mastersunion.org` email (no card)
+- **Masters' Union Student Access** — 20-day full access via verified `@mastersunion.org` email (no card)
 
 ## Tech Stack
 
@@ -118,8 +118,8 @@ src/
 
 | Decision | Status |
 |----------|--------|
-| Payment provider | **Deferred** — $10/mo = "Coming Soon" |
-| Masters' Union access | **10-day discount card** (not trial) |
+| Payment provider | **Deferred to Phase 7** — $10/mo = "Coming Soon" |
+| Masters' Union access | **20-day student trial** (no card, no provider call) |
 | Legal entity | **Deferred** — pick Supabase region for now |
 | YC directory access | **Manual curation** for Phase 1 |
 | Public profile gating | **Full preview, premium depth gated** |

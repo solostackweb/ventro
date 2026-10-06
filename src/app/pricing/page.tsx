@@ -6,13 +6,13 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
-import { cn, formatCurrency } from '@/lib/utils/helpers';
+import { cn } from '@/lib/utils/helpers';
 
 export default function PricingPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
-  const [entitlement, setEntitlement] = useState<'preview' | 'discount_card' | 'subscribed'>('preview');
+  const [entitlement, setEntitlement] = useState<'preview' | 'student_trial' | 'subscribed'>('preview');
   const [trialExpiresAt, setTrialExpiresAt] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
 
@@ -28,14 +28,14 @@ export default function PricingPage() {
       
       const { data: profile } = await supabase
         .from('user_profiles')
-        .select('entitlement, discount_card_expires_at')
+        .select('entitlement, trial_expires_at')
         .eq('id', session.user.id)
         .single();
       
       if (profile) {
         setUser(session.user);
         setEntitlement(profile.entitlement);
-        setTrialExpiresAt(profile.discount_card_expires_at);
+        setTrialExpiresAt(profile.trial_expires_at);
       }
       setLoading(false);
     };
@@ -43,78 +43,53 @@ export default function PricingPage() {
     fetchUser();
   }, []);
 
-  const handleCheckout = async (useTrial: boolean) => {
+  const handleTrialActivate = async () => {
     if (!user) {
       router.push(`/login?redirect=/pricing`);
       return;
     }
 
-    if (entitlement === 'subscribed') {
-      router.push('/settings');
-      return;
-    }
-
-    if (entitlement === 'discount_card' && !useTrial) {
-      // Already on trial, redirect to settings
+    if (entitlement === 'student_trial' || entitlement === 'subscribed') {
       router.push('/settings');
       return;
     }
 
     setProcessing(true);
     try {
-      const response = await fetch('/api/checkout', {
+      const response = await fetch('/api/trial/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: 'monthly', trial: useTrial }),
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Checkout failed');
-      }
 
       const data = await response.json();
 
-      // Load Razorpay script and open checkout
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.async = true;
-      script.onload = () => {
-        const options = {
-          key: data.key_id,
-          amount: data.amount,
-          currency: data.currency,
-          name: 'Ventro',
-          description: useTrial ? '10-day trial then $10/month' : '$10/month subscription',
-          order_id: data.order_id,
-          handler: async (response: any) => {
-            // Payment successful - redirect to success page
-            router.push('/settings?payment=success');
-          },
-          prefill: {
-            email: user.email,
-          },
-          theme: {
-            color: '#2563eb',
-          },
-          modal: {
-            ondismiss: () => {
-              setProcessing(false);
-            },
-          },
-        };
-        const rzp = new (window as any).Razorpay(options);
-        rzp.open();
-      };
-      document.body.appendChild(script);
+      if (!response.ok) {
+        throw new Error(data.error || 'Trial activation failed');
+      }
+
+      // Refresh user profile to get updated entitlement
+      const supabase = createClient();
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('entitlement, trial_expires_at')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        setEntitlement(profile.entitlement);
+        setTrialExpiresAt(profile.trial_expires_at);
+      }
+      
+      router.refresh();
     } catch (error) {
-      console.error('Checkout error:', error);
-      alert(error instanceof Error ? error.message : 'Checkout failed');
+      console.error('Trial activation error:', error);
+      alert(error instanceof Error ? error.message : 'Trial activation failed');
+    } finally {
       setProcessing(false);
     }
   };
 
-  const isTrialActive = entitlement === 'discount_card' && trialExpiresAt && new Date(trialExpiresAt) > new Date();
+  const isTrialActive = entitlement === 'student_trial' && trialExpiresAt && new Date(trialExpiresAt) > new Date();
   const trialDaysLeft = isTrialActive ? Math.ceil((new Date(trialExpiresAt!).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 0;
 
   if (loading) {
@@ -151,19 +126,20 @@ export default function PricingPage() {
                   <h3 className="font-semibold text-lg">Your current plan</h3>
                   <p className="text-text-secondary text-sm mt-1">
                     {entitlement === 'subscribed' && 'Active subscription • $10/month'}
-                    {entitlement === 'discount_card' && isTrialActive && `10-day trial • ${trialDaysLeft} days left`}
-                    {entitlement === 'discount_card' && !isTrialActive && 'Trial expired • Upgrade to continue'}
+                    {entitlement === 'student_trial' && isTrialActive && `20-day trial • ${trialDaysLeft} days left`}
+                    {entitlement === 'student_trial' && !isTrialActive && 'Trial expired • Upgrade to continue'}
                     {entitlement === 'preview' && 'Free preview • Limited access'}
                   </p>
                 </div>
                 <div className="flex gap-2">
                   {entitlement !== 'subscribed' && (
                     <Button 
-                      variant={entitlement === 'discount_card' && isTrialActive ? 'secondary' : 'primary'} 
-                      onClick={() => handleCheckout(false)}
+                      variant={entitlement === 'student_trial' && isTrialActive ? 'secondary' : 'primary'} 
+                      onClick={() => handleTrialActivate()}
                       loading={processing}
+                      disabled={entitlement === 'student_trial'}
                     >
-                      {entitlement === 'discount_card' && isTrialActive ? 'Upgrade now' : 'Subscribe $10/month'}
+                      {entitlement === 'student_trial' && isTrialActive ? 'Trial active' : entitlement === 'preview' ? 'Start 20-day trial' : 'Upgrade'}
                     </Button>
                   )}
                   <Button variant="ghost" onClick={() => router.push('/settings')}>
@@ -217,21 +193,39 @@ export default function PricingPage() {
                 Get started
               </Button>
             ) : (
-              <Button 
-                variant={entitlement === 'subscribed' ? 'secondary' : 'primary'} 
-                className="w-full" 
-                size="lg"
-                onClick={() => handleCheckout(false)}
-                loading={processing}
-                disabled={entitlement === 'subscribed'}
-              >
-                {entitlement === 'subscribed' ? 'Already subscribed' : 'Subscribe $10/month'}
-              </Button>
+              <>
+                {entitlement === 'preview' && (
+                  <Button 
+                    variant="secondary" 
+                    className="w-full" 
+                    size="lg"
+                    onClick={() => handleTrialActivate()}
+                    loading={processing}
+                  >
+                    Start 20-day trial
+                  </Button>
+                )}
+                {entitlement !== 'subscribed' && entitlement !== 'preview' && (
+                  <Button 
+                    variant="secondary" 
+                    className="w-full" 
+                    size="lg"
+                    disabled
+                  >
+                    Subscribe $10/month — Coming soon
+                  </Button>
+                )}
+                {entitlement === 'subscribed' && (
+                  <Button variant="secondary" className="w-full" disabled>
+                    Already subscribed
+                  </Button>
+                )}
+              </>
             )}
 
             {user && entitlement === 'preview' && (
               <p className="text-center text-sm text-text-muted mt-4">
-                <span className="font-medium">mastersunion.org</span> emails qualify for a 10-day free trial (no card required)
+                <span className="font-medium">mastersunion.org</span> emails qualify for a 20-day free trial (no card required)
               </p>
             )}
           </CardContent>
@@ -246,16 +240,16 @@ export default function PricingPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div>
-                  <h3 className="font-semibold">10-day free trial for Masters&apos; Union students</h3>
+                  <h3 className="font-semibold">20-day free trial for Masters&apos; Union students</h3>
                   <p className="text-text-secondary text-sm mt-1">
-                    Verify your <span className="font-mono">@mastersunion.org</span> email to unlock full access for 10 days — no credit card required.
+                    Verify your <span className="font-mono">@mastersunion.org</span> email to unlock full access for 20 days — no credit card required.
                   </p>
                 </div>
               </div>
               <Button 
                 variant="secondary" 
                 className="mt-4 w-full sm:w-auto"
-                onClick={() => handleCheckout(true)}
+                onClick={() => handleTrialActivate()}
                 loading={processing}
               >
                 Start free trial
@@ -274,8 +268,8 @@ export default function PricingPage() {
                 a: 'Access to news feed, company/investor directories, and basic search. Premium features like alerts, saved workspaces, pattern detection, and full investment tracker require subscription.'
               },
               {
-                q: 'How does the 10-day trial work?',
-                a: 'If you sign up with a verified @mastersunion.org email, you get 10 days of full Pro access free. No credit card required. After 10 days, you can subscribe to continue.'
+                q: 'How does the 20-day trial work?',
+                a: 'If you sign up with a verified @mastersunion.org email, you get 20 days of full Pro access free. No credit card required. After 20 days, you can subscribe to continue.'
               },
               {
                 q: 'Can I cancel anytime?',
@@ -283,7 +277,7 @@ export default function PricingPage() {
               },
               {
                 q: 'What payment methods are accepted?',
-                a: 'Credit/debit cards via Razorpay (USD). Secure, PCI-compliant processing.'
+                a: 'Credit/debit cards (USD). Secure, PCI-compliant processing. Coming soon.'
               },
             ].map((faq, i) => (
               <Card key={i}>

@@ -1,7 +1,8 @@
 import { createServerClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
-import { feedFilterSchema, searchSchema } from '@/lib/validators/schemas';
+import { feedFilterSchema } from '@/lib/validators/schemas';
 import { normalizeStory } from '@/lib/utils/normalize-story';
+import { handleApiError } from '@/lib/api/errors';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,7 +75,6 @@ export async function GET(request: NextRequest) {
       query = query.eq('verification_label', 'verified');
     }
     if (validated.companies?.length) {
-      // Filter via story_companies join - requires subquery
       query = query.in('story_companies.company_id', validated.companies);
     }
     if (validated.investors?.length) {
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error('Feed API error:', error);
-      return NextResponse.json({ error: 'Failed to fetch feed' }, { status: 500 });
+      return handleApiError(error);
     }
 
     const transformedStories = (stories || []).map((s) => normalizeStory(s));
@@ -103,7 +103,6 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Feed API error:', error);
-    return NextResponse.json({ error: 'Failed to fetch feed' }, { status: 500 });
+    return handleApiError(error);
   }
 }

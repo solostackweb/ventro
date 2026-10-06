@@ -3,6 +3,19 @@ const path = require('path');
 const vm = require('vm');
 const ts = require('typescript');
 
+// Mock JSDOM to avoid ESM dependency issues
+const mockJSDOM = class {
+  constructor(html, options) {
+    this.window = {
+      document: {
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        textContent: '',
+      },
+    };
+  }
+};
+
 function loadFetcher(supabase, feedItems) {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/ingestion/rss-fetcher.ts'), 'utf8');
   const compiled = ts.transpileModule(source, {
@@ -19,11 +32,20 @@ function loadFetcher(supabase, feedItems) {
       if (id === '@/lib/r2/client') return { generateR2Key: () => '', uploadToR2: async () => ({ success: true }) };
       if (id === 'rss-parser') return Parser;
       if (id === './feed-presentation') return { presentFeedItem: () => ({ imageUrl: null, excerpt: '' }) };
+      if (id === 'jsdom') return { JSDOM: mockJSDOM };
+      if (id === 'crypto') return require('crypto');
+      // Mock any other problematic imports
+      if (id.startsWith('@exodus') || id === 'html-encoding-sniffer') {
+        return {};
+      }
       return require(id);
     },
     console,
     Date,
     Set,
+    Map,
+    TextEncoder: require('util').TextEncoder,
+    TextDecoder: require('util').TextDecoder,
   });
   return exports;
 }

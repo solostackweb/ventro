@@ -86,7 +86,7 @@ function SignupPageContent() {
 
           {showMastersUnionNote && (
             <div className="mb-6 p-4 rounded-lg bg-accent-purple/10 text-accent-purple text-sm" role="note">
-              <strong>Masters&apos; Union student detected!</strong> Verify your @mastersunion.org email to get 10-day full access — no card required.
+              <strong>Masters&apos; Union student detected!</strong> Verify your @mastersunion.org email to get 20-day full access — no card required.
             </div>
           )}
 

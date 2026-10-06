@@ -153,7 +153,7 @@ export default function CommunityPage() {
 
   const handlePostComment = async () => {
     if (!newComment.trim() || !selectedThread) return;
-    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'discount_card')) return;
+    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'student_trial')) return;
 
     setReplying(true);
     try {
@@ -176,7 +176,7 @@ export default function CommunityPage() {
   const handleCreateThread = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim()) return;
-    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'discount_card')) return;
+    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'student_trial')) return;
 
     setReplying(true);
     try {
@@ -204,7 +204,7 @@ export default function CommunityPage() {
 
   const handleReply = async (threadId: string) => {
     if (!replyContent.trim()) return;
-    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'discount_card')) return;
+    if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'student_trial')) return;
 
     setReplying(true);
     try {
@@ -227,10 +227,10 @@ export default function CommunityPage() {
   function ThreadDetail() {
     if (!selectedThread) return null;
 
-    const canReply = profile?.entitlement === 'subscribed' || profile?.entitlement === 'discount_card';
+    const canReply = profile?.entitlement === 'subscribed' || profile?.entitlement === 'student_trial';
 
     let replyForm = null;
-    if (profile && (profile.entitlement === 'subscribed' || profile.entitlement === 'discount_card') && !replyingTo) {
+    if (profile && (profile.entitlement === 'subscribed' || profile.entitlement === 'student_trial') && !replyingTo) {
       replyForm = (
         <div className="border-t border-border-default pt-4">
           <h3 className="font-semibold mb-3">Write a reply</h3>

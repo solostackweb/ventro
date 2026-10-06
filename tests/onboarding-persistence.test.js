@@ -5,8 +5,9 @@ describe('onboarding persistence contracts', () => {
   const read = (relativePath) => fs.readFileSync(path.resolve(__dirname, '..', relativePath), 'utf8');
 
   it('creates and backfills profiles for Supabase Auth users', () => {
-    const migration = read('supabase/migrations/20261001093000_create_user_profiles_on_signup.sql');
+    const migration = read('supabase/migrations/20261006010000_initial_ventro_schema.sql');
 
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION public\.handle_new_user\(\)/);
     expect(migration).toMatch(/CREATE TRIGGER on_auth_user_created/);
     expect(migration).toMatch(/AFTER INSERT ON auth\.users/);
     expect(migration).toMatch(/INSERT INTO public\.user_profiles \(id, email\)/);

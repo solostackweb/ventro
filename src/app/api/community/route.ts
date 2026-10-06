@@ -1,5 +1,6 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { createServerClient, hasFullAccess } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
+import { handleApiError } from '@/lib/api/errors';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
 
       if (error) {
         console.error('Community threads API error:', error);
-        return NextResponse.json({ error: 'Failed to fetch threads' }, { status: 500 });
+        return handleApiError(error);
       }
 
       return NextResponse.json({
@@ -101,7 +102,7 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error('Community threads API error:', error);
-      return NextResponse.json({ error: 'Failed to fetch threads' }, { status: 500 });
+      return handleApiError(error);
     }
 
     return NextResponse.json({
@@ -116,7 +117,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Community API error:', error);
-    return NextResponse.json({ error: 'Failed to fetch community' }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
@@ -129,15 +130,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Check if user has premium access
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('entitlement')
-      .eq('id', user.id)
-      .single();
-
-    const entitlement = profile?.entitlement || 'preview';
-    if (entitlement !== 'subscribed' && entitlement !== 'discount_card') {
+    // Centralized expiry-aware access check (derives identity from auth.uid())
+    const hasAccess = await hasFullAccess();
+    if (!hasAccess) {
       return NextResponse.json({ error: 'Premium access required to create discussions' }, { status: 403 });
     }
 
@@ -166,7 +161,7 @@ export async function POST(request: NextRequest) {
 
     if (threadError) {
       console.error('Create thread error:', threadError);
-      return NextResponse.json({ error: 'Failed to create thread' }, { status: 500 });
+      return handleApiError(threadError);
     }
 
     // Create initial comment
@@ -182,7 +177,7 @@ export async function POST(request: NextRequest) {
 
     if (commentError) {
       console.error('Create comment error:', commentError);
-      return NextResponse.json({ error: 'Failed to create initial comment' }, { status: 500 });
+      return handleApiError(commentError);
     }
 
     // Update thread with comment count
@@ -197,6 +192,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Create thread error:', error);
-    return NextResponse.json({ error: 'Failed to create discussion' }, { status: 500 });
+    return handleApiError(error);
   }
 }

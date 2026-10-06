@@ -377,9 +377,9 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                   {[
-                    { time: '2 min ago', actor: 'system', action: 'discount_card_issued', entity: 'user: student@mastersunion.org', details: 'Expires 2026-10-11' },
+                    { time: '2 min ago', actor: 'system', action: 'student_trial_activated', entity: 'user: student@mastersunion.org', details: 'Expires 2026-10-11' },
                     { time: '1 hr ago', actor: 'admin@ventro.ai', action: 'source_paused', entity: 'the-information', details: 'Paywall blocked' },
-                    { time: '3 hr ago', actor: 'system', action: 'entitlement_expired', entity: 'user: alum@mastersunion.org', details: '10-day access expired' },
+                    { time: '3 hr ago', actor: 'system', action: 'entitlement_expired', entity: 'user: alum@mastersunion.org', details: '20-day trial expired' },
                     { time: '1 day ago', actor: 'admin@ventro.ai', action: 'entity_merged', entity: 'company: peak-xv + sequoia-india', details: 'Rebrand handling' },
                     { time: '2 days ago', actor: 'system', action: 'pattern_published', entity: 'pattern: ai-infra-surge', details: 'Admin approved' },
                   ].map((audit, i) => (

@@ -1,4 +1,4 @@
-export type Entitlement = 'preview' | 'discount_card' | 'subscribed';
+export type Entitlement = 'preview' | 'student_trial' | 'subscribed';
 
 export type UserRole = 'founder' | 'investor' | 'analyst' | 'student' | 'other';
 
@@ -30,7 +30,9 @@ export interface UserProfile {
   stages: Stage[];
   onboarding_completed_at: string | null;
   entitlement: Entitlement;
-  discount_card_expires_at: string | null;
+  trial_expires_at: string | null;
+  trial_issued_at: string | null;
+  trial_eligibility_domain: string | null;
   created_at: string;
   updated_at: string;
 }

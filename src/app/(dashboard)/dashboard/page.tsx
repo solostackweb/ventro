@@ -27,10 +27,12 @@ export default function DashboardPage() {
   const supabase = createClient();
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userEntitlement, setUserEntitlement] = useState<'preview' | 'discount_card' | 'subscribed'>('preview');
+  const [userEntitlement, setUserEntitlement] = useState<'preview' | 'student_trial' | 'subscribed'>('preview');
   const [onboardingCompleted, setOnboardingCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState<FeedResponse['pagination'] | null>(null);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const checkAuth = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -40,13 +42,13 @@ export default function DashboardPage() {
     }
     const { data: profile } = await supabase
       .from('user_profiles')
-      .select('entitlement, discount_card_expires_at, onboarding_completed_at')
+      .select('entitlement, trial_expires_at, onboarding_completed_at')
       .eq('id', session.user.id)
       .single();
 
     let entitlement = profile?.entitlement || 'preview';
-    if (entitlement === 'discount_card' && profile?.discount_card_expires_at) {
-      if (new Date(profile.discount_card_expires_at) < new Date()) {
+    if (entitlement === 'student_trial' && profile?.trial_expires_at) {
+      if (new Date(profile.trial_expires_at) < new Date()) {
         entitlement = 'preview';
       }
     }
@@ -54,12 +56,16 @@ export default function DashboardPage() {
     setOnboardingCompleted(!!profile?.onboarding_completed_at);
   }, [router, supabase]);
 
-  const fetchFeed = useCallback(async () => {
-    setLoading(true);
+  const fetchFeed = useCallback(async (pageNum = 1) => {
+    if (pageNum === 1) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     setError(null);
     try {
       const params = new URLSearchParams({
-        page: '1',
+        page: pageNum.toString(),
         limit: '20',
         sort: 'latest',
       });
@@ -68,18 +74,24 @@ export default function DashboardPage() {
       });
       if (!response.ok) throw new Error('Failed to fetch feed');
       const data: FeedResponse = await response.json();
-      setStories(data.stories);
+      if (pageNum === 1) {
+        setStories(data.stories);
+      } else {
+        setStories(prev => [...prev, ...data.stories]);
+      }
       setPagination(data.pagination);
+      setPage(pageNum);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load feed');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
     checkAuth();
-    fetchFeed();
+    fetchFeed(1);
   }, [checkAuth, fetchFeed]);
 
   const getVerificationBadge = (status: VerificationStatus) => {
@@ -170,7 +182,7 @@ export default function DashboardPage() {
             </svg>
             <h3 className="text-lg font-medium mb-2">Failed to load feed</h3>
             <p className="text-text-secondary mb-4">{error}</p>
-            <Button variant="secondary" onClick={fetchFeed}>Retry</Button>
+            <Button variant="secondary" onClick={() => fetchFeed(1)}>Retry</Button>
           </div>
         )}
 
@@ -284,10 +296,8 @@ export default function DashboardPage() {
             {/* Pagination */}
             {pagination && pagination.hasMore && (
               <div className="text-center pt-4">
-                <Button variant="secondary" onClick={() => {
-                  // TODO: implement pagination
-                }} disabled>
-                  Load more
+                <Button variant="secondary" onClick={() => fetchFeed(page + 1)} loading={loadingMore} disabled={loadingMore}>
+                  {loadingMore ? 'Loading...' : 'Load more'}
                 </Button>
               </div>
             )}

@@ -14,8 +14,8 @@ describe('story detail source contract', () => {
 
     expect(route).toMatch(/story_sources\s*\(/);
     expect(route).not.toMatch(/source_connectors!inner/);
-    expect(schema).toMatch(/CREATE TABLE story_sources\s*\(/);
-    expect(schema).not.toMatch(/source_id\s+TEXT[^\n]*REFERENCES source_connectors\(source_id\)[\s\S]*?UNIQUE\(story_id, source_url\)/);
+    expect(schema).toMatch(/CREATE TABLE public\.story_sources\s*\(/);
+    expect(schema).not.toMatch(/source_id\s+TEXT[^\n]*REFERENCES public\.source_connectors\(source_id\)[\s\S]*?UNIQUE\(story_id, source_url\)/);
   });
 
   it('retains a visible source label when publisher is absent', () => {

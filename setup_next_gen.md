@@ -377,21 +377,24 @@ Migration: `supabase/migrations/20261003000002_add_funding_rounds.sql`
 ```
 Migration: `supabase/migrations/20261004000000_add_subscriptions_billing.sql`
 
-### 10.2 Implementation (✅ Complete)
-- `POST /api/checkout` — Creates Razorpay order for $10/month or 10-day trial
-- `POST /api/webhooks/razorpay` — Handles payment.captured, payment.failed, subscription.* events
-- Settings billing tab — Shows current plan, trial expiry, upgrade options
+### 10.2 Implementation (✅ Complete — Payment Deferred to Phase 7)
+- `POST /api/trial/activate` — Atomic 20-day trial activation for verified `@mastersunion.org` users (no card, no provider call)
+- `POST /api/checkout` — **Disabled (503 PAYMENTS_DISABLED)** — Payment integration deferred to Phase 7
+- `POST /api/webhooks/razorpay` — **Disabled (503 PAYMENTS_DISABLED)** — Payment integration deferred to Phase 7
+- Settings billing tab — Shows current plan, trial expiry, "Coming Soon" for paid subscription
 - Settings personalization tab — Follows (funds/companies), alert rules, notification preferences
-- Subscription lifecycle — trial → active → cancelled/completed with entitlement audit trail
-- Idempotent webhook processing via `billing_events.idempotency_key`
-- 10-day trial for `@mastersunion.org` emails (exact domain match, no card required)
+- Subscription lifecycle — trial → active → cancelled/completed with entitlement audit trail (paid path deferred)
+- 20-day trial for `@mastersunion.org` emails (exact domain match, no card required, no provider call)
+- Centralized expiry-aware authorization via `has_full_access()` RPC and `hasFullAccess()` server helper
+- Column-level privileges: `REVOKE UPDATE ON user_profiles FROM authenticated`; `GRANT UPDATE` only on allowed columns
 
-### 10.3 Environment Variables (Required for Phase 4)
+### 10.3 Environment Variables (Phase 4 — Payment Deferred)
 ```bash
-RAZORPAY_KEY_ID=<razorpay-key-id>
-RAZORPAY_KEY_SECRET=<razorpay-key-secret>
-RAZORPAY_WEBHOOK_SECRET=<razorpay-webhook-secret>
-NEXT_PUBLIC_RAZORPAY_KEY_ID=<razorpay-key-id>
+# Razorpay credentials NOT required for Phase 4 (payments deferred to Phase 7)
+# RAZORPAY_KEY_ID=<razorpay-key-id>
+# RAZORPAY_KEY_SECRET=<razorpay-key-secret>
+# RAZORPAY_WEBHOOK_SECRET=<razorpay-webhook-secret>
+# NEXT_PUBLIC_RAZORPAY_KEY_ID=<razorpay-key-id>
 ```
 
 ---
@@ -506,19 +509,18 @@ psql -h <host> -U <user> -d <db> < backup.sql
 
 ---
 
-## 13. Phase 6 Complete — All Quality Gates Pass
+## 13. Phase 4 Complete — 20-Day Trial Secured, Payments Deferred
 
 | Component | Status |
 |-----------|--------|
-| Discussion threads + replies | ✅ |
-| Abuse reporting + auto-moderation | ✅ |
-| Admin moderation tools | ✅ |
-| Source/usage analytics dashboard | ✅ |
-| Backup/restore documentation | ✅ |
-| Accessibility (WCAG AA) | ✅ |
-| Private notes RLS | ✅ |
-| Restore drill documented | ✅ |
-| E2E core journeys | ✅ |
+| Atomic trial activation RPC (`activate_student_trial`) | ✅ |
+| 20-day trial for `@mastersunion.org` (no card, no provider) | ✅ |
+| Centralized expiry-aware authorization (`has_full_access` RPC + server helper) | ✅ |
+| Column-level privileges (`REVOKE UPDATE` + `GRANT` allowed columns) | ✅ |
+| Legacy `discount_card` → `student_trial` migration with 20-day extension | ✅ |
+| Disabled checkout/webhook endpoints (503 PAYMENTS_DISABLED) | ✅ |
+| Database integration tests for all trial security properties | ✅ |
+| Paid subscription lifecycle | **Deferred to Phase 7** |
 
 ---
 
@@ -540,6 +542,6 @@ psql -h <host> -U <user> -d <db> < backup.sql
 |------|-------|--------|---------|
 | 2026-10-03 | 2 | — | Initial setup doc; Phases 0–2 complete |
 | 2026-10-03 | 3 | — | Funding rounds schema, extraction pipeline, event type classification; full article fetch unblocked |
-| 2026-10-04 | 4 | — | Phase 4 complete: $10/month checkout, 10-day trial (mastersunion.org), entitlements, saved items, follows, alerts, billing webhooks, subscription lifecycle |
+| 2026-10-06 | 4 | — | Phase 4 complete: 20-day student trial via atomic RPC (`activate_student_trial`), 20-day trial for `@mastersunion.org` (no card, no provider), centralized expiry-aware auth (`has_full_access`), column-level privileges, legacy `discount_card` migration, checkout/webhook disabled (503), payments deferred to Phase 7 |
 | 2026-10-04 | 5 | — | Phase 5 complete: Stated thesis extraction, observed thesis computation, pattern detection engine, admin review queue |
 | 2026-10-04 | 6 | — | Phase 6 complete: Discussion threads, abuse reporting, auto-moderation, admin moderation, source/usage analytics, backup/restore docs, accessibility, restore drill, E2E journeys |

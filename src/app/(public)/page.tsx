@@ -37,7 +37,7 @@ const FEATURES = [
   },
 ];
 
-const PRICING_NOTE = 'Single plan: $10/month USD. Masters\' Union students: 10-day full access via verified @mastersunion.org email (no card). No annual tiers.';
+const PRICING_NOTE = 'Single plan: $10/month USD. Masters\' Union students: 20-day full access via verified @mastersunion.org email (no card). No annual tiers.';
 
 export default function LandingPage() {
   return (
@@ -218,7 +218,7 @@ export default function LandingPage() {
           <h2 className="text-3xl sm:text-4xl font-bold mb-4">Ready to find your investors?</h2>
           <p className="text-blue-100 mb-8">
             Join founders and analysts tracking AI funding with evidence. 
-            10-day access for Masters&apos; Union students. Coming soon: $10/month for everyone.
+            20-day access for Masters&apos; Union students. Coming soon: $10/month for everyone.
           </p>
           <Link href="/signup">
             <Button size="lg" variant="secondary" className="bg-white text-accent-blue hover:bg-blue-50 w-full sm:w-auto">

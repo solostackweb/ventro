@@ -161,7 +161,7 @@ export default function SettingsPage() {
   const getEntitlementLabel = (entitlement: string) => {
     switch (entitlement) {
       case 'preview': return 'Preview';
-      case 'discount_card': return '10-Day Access';
+      case 'student_trial': return '20-Day Trial';
       case 'subscribed': return 'Subscribed';
       default: return 'Unknown';
     }
@@ -170,7 +170,7 @@ export default function SettingsPage() {
   const getEntitlementColor = (entitlement: string) => {
     switch (entitlement) {
       case 'preview': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100';
-      case 'discount_card': return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100';
+      case 'student_trial': return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100';
       case 'subscribed': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100';
       default: return 'bg-gray-100 text-gray-800';
     }
@@ -515,14 +515,14 @@ export default function SettingsPage() {
                     <div>
                       <p className="font-semibold">Current Plan</p>
                       <p className="text-sm text-text-muted">
-                        {profile.entitlement === 'discount_card' 
-                          ? `10-Day Access — Expires ${profile.discount_card_expires_at ? new Date(profile.discount_card_expires_at).toLocaleDateString() : 'soon'}`
+                        {profile.entitlement === 'student_trial' 
+                          ? `20-Day Trial — Expires ${profile.trial_expires_at ? new Date(profile.trial_expires_at).toLocaleDateString() : 'soon'}`
                           : profile.entitlement === 'subscribed'
                             ? 'Pro — $10/month'
                             : 'Preview (Free)'}
                       </p>
                     </div>
-                    <Badge variant={profile.entitlement === 'subscribed' ? 'green' : profile.entitlement === 'discount_card' ? 'purple' : 'blue'}>
+                    <Badge variant={profile.entitlement === 'subscribed' ? 'green' : profile.entitlement === 'student_trial' ? 'purple' : 'blue'}>
                       {getEntitlementLabel(profile.entitlement)}
                     </Badge>
                   </div>
@@ -549,11 +549,11 @@ export default function SettingsPage() {
                           <Button className="mt-4 w-full" disabled>Coming Soon</Button>
                         </CardContent>
                       </Card>
-                      {profile.entitlement === 'discount_card' && (
+                      {profile.entitlement === 'student_trial' && (
                         <Card>
                           <CardContent className="p-6 text-center">
                             <span className="text-3xl font-bold text-accent-purple">Free</span>
-                            <span className="text-text-muted">10-day access</span>
+                            <span className="text-text-muted">20-day trial</span>
                             <ul className="mt-4 space-y-2 text-sm text-text-secondary text-left">
                               <li>✓ Same as Pro</li>
                               <li>✓ No card required</li>

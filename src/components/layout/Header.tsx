@@ -95,7 +95,7 @@ export function Header({ user }: { user: { email: string; entitlement: string } 
 
           <div className="flex items-center gap-3">
             <div className="hidden sm:block px-3 py-1.5 text-xs font-medium rounded-full bg-accent-purple/10 text-accent-purple">
-              {user.entitlement === 'discount_card' ? '10-Day Access' : user.entitlement === 'subscribed' ? 'Pro' : 'Preview'}
+              {user.entitlement === 'student_trial' ? '20-Day Trial' : user.entitlement === 'subscribed' ? 'Pro' : 'Preview'}
             </div>
             <div className="relative">
               <Button variant="ghost" size="sm" className="gap-1">

@@ -104,8 +104,8 @@ export function getEntitlementLabel(entitlement: string): string {
   switch (entitlement) {
     case 'preview':
       return 'Preview';
-    case 'discount_card':
-      return '10-Day Access';
+    case 'student_trial':
+      return '20-Day Trial';
     case 'subscribed':
       return 'Subscribed';
     default:
