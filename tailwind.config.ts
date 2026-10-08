@@ -9,6 +9,19 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        ink: {
+          950: 'var(--ink-950)',
+          900: 'var(--ink-900)',
+          800: 'var(--ink-800)',
+          600: 'var(--ink-600)',
+          500: 'var(--ink-500)',
+          400: 'var(--ink-400)',
+        },
+        research: {
+          DEFAULT: 'var(--research)',
+          muted: 'var(--research-muted)',
+        },
+        rule: 'var(--rule)',
         bg: {
           primary: 'var(--bg-primary)',
           secondary: 'var(--bg-secondary)',

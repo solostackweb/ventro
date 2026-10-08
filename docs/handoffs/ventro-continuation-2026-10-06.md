@@ -2058,3 +2058,38 @@ npm run answers:compute -- --period-start="2026-07-01T00:00:00Z" --period-end="2
 ```
 
 Use dates appropriate to the current 90-day window. Confirm both rows exist in `answer_snapshots`, every material section has citations, and no production fixture/fabricated data was inserted. Payments remain disabled. Checkpoint 4 visual redesign has not started.
+
+## Continuation Update — Checkpoint 4 Application Pass (2026-10-08)
+
+Checkpoint 4 has been implemented locally on top of committed Checkpoint 3. Do not rerun Prompt D blindly against this working tree.
+
+Implemented:
+
+- Replaced the old feed-only dashboard with the real `/api/intelligence/answers` two-answer experience.
+- Added URL-persistent period, domain, geography, and stage filters.
+- Preserved answer citation row IDs through the repository mapper and added a rights-aware evidence drawer using `/api/intelligence/citations/[id]`.
+- Added disclosed-only capital metrics, explicit undisclosed counts, confidence, coverage, freshness, stale labels, caveats, counter-evidence, sparse and error states, and personalization explanations.
+- Added the approved persistent engine navigation, mobile bottom navigation, semantic ink/ivory design tokens, 44px controls, focus-visible, reduced-motion, safe-area, and tabular-number behavior.
+- Added `/theses` with a strict stated-versus-observed comparison using real Checkpoint 3 output.
+- Replaced the public landing page's static deal example and generic feature-card grid with a product-truth composition that contains no fabricated investment data.
+- Added settings deep links, email-verification status, password-reset entry, global sign-out, and explicit-confirmation account deletion via `/api/account/delete`.
+- Kept checkout and payment provider surfaces disabled and changed the billing tab language to non-payment access language.
+- Added `tests/checkpoint4-application.test.js` with 10 UI contract tests.
+- Added `docs/designs/checkpoint-4-application-audit.md`.
+
+Verification:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 215 warnings.
+- `npm test`: 42 suites passed and 348 tests passed; 1 Docker-only database suite and 22 tests skipped.
+- `npm run build`: passed; 34 routes generated.
+- Focused Checkpoint 4 suite: 10/10 passed.
+- The dependency folder was found incomplete (missing Next.js and JSDOM package files) and was repaired with `npm ci`; package versions were not changed.
+
+Browser QA concern:
+
+- The Codex in-app browser could not reach the Windows-hosted development server at `localhost` or the LAN address.
+- Installed Chrome and Edge headless processes were also attempted but produced no screenshots in this environment.
+- Therefore no rendered-browser screenshot is claimed. Use the route and viewport checklist in `docs/designs/checkpoint-4-application-audit.md` in a normal browser or deployed preview.
+
+Status: `DONE_WITH_CONCERNS`. Code, tests, lint, typecheck, and production build pass. The remaining concern is rendered browser verification. Checkpoint 3's hosted migration and real-data answer computation still need to be completed before the dashboard can show real published answers; honest empty states appear until then. Payments remain deferred.

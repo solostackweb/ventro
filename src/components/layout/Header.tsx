@@ -2,172 +2,65 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { BarChart3, Bell, Bookmark, BriefcaseBusiness, Building2, GraduationCap, Home, Menu, MessageSquare, Newspaper, Search, Settings, SlidersHorizontal, Users, X } from 'lucide-react';
+import { useState } from 'react';
 import { cn } from '@/lib/utils/helpers';
 import { Button } from '@/components/ui/Button';
 
-const NAV_ITEMS = [
-  { href: '/dashboard', label: 'For You', icon: 'home' },
-  { href: '/news', label: 'News', icon: 'newspaper' },
-  { href: '/investments', label: 'Investments', icon: 'trending-up' },
-  { href: '/companies', label: 'Companies', icon: 'building-2' },
-  { href: '/investors', label: 'Investors', icon: 'users' },
-  { href: '/yc', label: 'YC', icon: 'graduation-cap' },
-  { href: '/patterns', label: 'Patterns', icon: 'bar-chart-2' },
-  { href: '/saved', label: 'Saved', icon: 'bookmark' },
-  { href: '/community', label: 'Community', icon: 'message-square' },
+const PRIMARY_ITEMS = [
+  { href: '/dashboard', label: 'Today', icon: Home },
+  { href: '/news', label: 'News', icon: Newspaper },
+  { href: '/investments', label: 'Investments', icon: BriefcaseBusiness },
+  { href: '/investors', label: 'VC Engine', icon: Users },
+  { href: '/yc', label: 'YC Engine', icon: GraduationCap },
+  { href: '/theses', label: 'Theses', icon: SlidersHorizontal },
+  { href: '/patterns', label: 'Patterns', icon: BarChart3 },
 ];
 
-const PUBLIC_NAV_ITEMS = [
-  { href: '/', label: 'Home' },
-  { href: '/news', label: 'News' },
-  { href: '/companies', label: 'Companies' },
-  { href: '/investors', label: 'Investors' },
-  { href: '/yc', label: 'YC' },
-  { href: '/pricing', label: 'Pricing' },
+const WORKSPACE_ITEMS = [
+  { href: '/companies', label: 'Companies', icon: Building2 },
+  { href: '/saved', label: 'Saved research', icon: Bookmark },
+  { href: '/alerts', label: 'Alerts', icon: Bell },
+  { href: '/community', label: 'Community', icon: MessageSquare },
+  { href: '/settings', label: 'Settings & access', icon: Settings },
 ];
+
+const PUBLIC_ITEMS = [{ href: '/', label: 'Home' }, { href: '/news', label: 'News' }, { href: '/investors', label: 'VCs' }, { href: '/yc', label: 'YC' }, { href: '/pricing', label: 'Access' }];
+
+function Brand() {
+  return <Link href="/dashboard" className="brand-lockup" aria-label="Ventro dashboard"><span className="brand-mark" aria-hidden="true"><i /><i /></span><span><strong>VENTRO</strong><small>Intelligence for what comes next</small></span></Link>;
+}
+
+function NavGroup({ items, pathname, onNavigate }: { items: typeof PRIMARY_ITEMS; pathname: string; onNavigate?: () => void }) {
+  return <nav className="space-y-1" aria-label="Product navigation">{items.map(item => {
+    const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
+    return <Link key={item.href} href={item.href} onClick={onNavigate} className={cn('side-nav-link', active && 'side-nav-link-active')} aria-current={active ? 'page' : undefined}><item.icon className="h-[18px] w-[18px]" /><span>{item.label}</span></Link>;
+  })}</nav>;
+}
+
+function SidebarContent({ user, pathname, onNavigate }: { user: { email: string; entitlement: string }; pathname: string; onNavigate?: () => void }) {
+  return <div className="flex h-full flex-col"><div className="px-5 py-6"><Brand /></div><div className="flex-1 overflow-y-auto px-3 pb-6"><NavGroup items={PRIMARY_ITEMS} pathname={pathname} onNavigate={onNavigate} /><div className="mx-3 my-5 border-t border-white/10" /><p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-300/70">Workspace</p><NavGroup items={WORKSPACE_ITEMS} pathname={pathname} onNavigate={onNavigate} /></div><div className="border-t border-white/10 p-4"><Link href="/settings?tab=access" onClick={onNavigate} className="block rounded-sm border border-white/10 bg-white/[0.04] p-3 hover:bg-white/[0.07]"><div className="flex items-center justify-between gap-3"><span className="truncate text-sm font-medium text-slate-100">{user.email.split('@')[0]}</span><span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">{user.entitlement === 'student_trial' ? 'Trial' : user.entitlement === 'subscribed' ? 'Pro' : 'Preview'}</span></div><p className="mt-1 text-xs text-slate-400">Manage profile and access</p></Link><a href="/api/auth/signout" className="mt-2 block min-h-11 px-3 py-3 text-xs font-medium text-slate-400 hover:text-white">Sign out</a></div></div>;
+}
 
 export function Header({ user }: { user: { email: string; entitlement: string } | null }) {
   const pathname = usePathname();
-  const isAuthenticated = !!user;
+  const [open, setOpen] = useState(false);
+  if (!user) return <header className="sticky top-0 z-40 border-b border-rule bg-research/95 backdrop-blur"><div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6"><Link href="/" className="text-lg font-black tracking-[0.14em] text-ink-950">VENTRO</Link><nav className="hidden items-center gap-6 md:flex" aria-label="Main navigation">{PUBLIC_ITEMS.map(item => <Link key={item.href} href={item.href} className={cn('text-sm font-medium text-ink-600 hover:text-ink-950', pathname === item.href && 'text-cyan-700')}>{item.label}</Link>)}</nav><div className="flex items-center gap-2"><Link href="/login"><Button variant="ghost" size="sm">Sign in</Button></Link><Link href="/signup"><Button size="sm">Start research</Button></Link></div></div></header>;
 
-  if (!isAuthenticated) {
-    return (
-      <header className="sticky top-0 z-40 w-full border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
-        <nav className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8" aria-label="Main navigation">
-          <div className="flex h-16 items-center justify-between">
-            <Link href="/" className="text-xl font-bold text-text-primary" aria-label="Ventro Home">
-              Ventro
-            </Link>
-            <div className="hidden md:flex md:items-center md:gap-6">
-              {PUBLIC_NAV_ITEMS.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'text-sm font-medium transition-colors',
-                    pathname === item.href
-                      ? 'text-accent-blue'
-                      : 'text-text-secondary hover:text-text-primary'
-                  )}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </div>
-            <div className="flex items-center gap-3">
-              <Link href="/login">
-                <Button variant="ghost" size="sm">Sign in</Button>
-              </Link>
-              <Link href="/signup">
-                <Button size="sm">Get Started</Button>
-              </Link>
-            </div>
-          </div>
-        </nav>
-      </header>
-    );
-  }
-
-  return (
-    <header className="sticky top-0 z-40 w-full border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
-      <nav className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8" aria-label="Main navigation">
-        <div className="flex h-16 items-center justify-between">
-          <Link href="/dashboard" className="text-xl font-bold text-text-primary" aria-label="Ventro Dashboard">
-            Ventro
-          </Link>
-          
-          <div className="hidden md:flex md:items-center md:gap-1 overflow-x-auto scrollbar-hide pb-1">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  pathname === item.href
-                    ? 'bg-accent-blue/10 text-accent-blue'
-                    : 'text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
-                )}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:block px-3 py-1.5 text-xs font-medium rounded-full bg-accent-purple/10 text-accent-purple">
-              {user.entitlement === 'student_trial' ? '20-Day Trial' : user.entitlement === 'subscribed' ? 'Pro' : 'Preview'}
-            </div>
-            <div className="relative">
-              <Button variant="ghost" size="sm" className="gap-1">
-                {user.email.split('@')[0]}
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-              </Button>
-              <div className="absolute right-0 mt-2 w-48 bg-bg-secondary border border-border-default rounded-lg shadow-lg py-1 hidden group-hover:block" role="menu">
-                <Link href="/settings/profile" className="block px-4 py-2 text-sm text-text-secondary hover:bg-bg-tertiary" role="menuitem">Profile</Link>
-                <Link href="/settings/billing" className="block px-4 py-2 text-sm text-text-secondary hover:bg-bg-tertiary" role="menuitem">Billing</Link>
-                <Link href="/settings/personalization" className="block px-4 py-2 text-sm text-text-secondary hover:bg-bg-tertiary" role="menuitem">Personalization</Link>
-                <Link href="/settings/alerts" className="block px-4 py-2 text-sm text-text-secondary hover:bg-bg-tertiary" role="menuitem">Alerts</Link>
-                <hr className="my-1 border-border-default" />
-                <a href="/api/auth/signout" className="block px-4 py-2 text-sm text-text-secondary hover:bg-bg-tertiary" role="menuitem">Sign out</a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-    </header>
-  );
+  return <>
+    <aside className="app-sidebar hidden lg:block"><SidebarContent user={user} pathname={pathname} /></aside>
+    <header className="mobile-app-header lg:hidden"><Brand /><button className="icon-button border-white/15 text-white" onClick={() => setOpen(true)} aria-label="Open navigation"><Menu className="h-5 w-5" /></button></header>
+    {open && <div className="fixed inset-0 z-[70] bg-ink-950/60 lg:hidden"><button className="absolute inset-0" onClick={() => setOpen(false)} aria-label="Close navigation" /><aside className="relative h-full w-[min(88vw,330px)] bg-ink-950 shadow-2xl"><button className="icon-button absolute right-3 top-4 border-white/15 text-white" onClick={() => setOpen(false)} aria-label="Close navigation"><X className="h-5 w-5" /></button><SidebarContent user={user} pathname={pathname} onNavigate={() => setOpen(false)} /></aside></div>}
+  </>;
 }
 
 export function MobileBottomNav({ user }: { user: { entitlement: string } | null }) {
   const pathname = usePathname();
-  const isAuthenticated = !!user;
-
-  if (!isAuthenticated) return null;
-
-  const items = [
-    { href: '/dashboard', label: 'For You', icon: HomeIcon },
-    { href: '/news', label: 'News', icon: NewspaperIcon },
-    { href: '/saved', label: 'Saved', icon: BookmarkIcon },
-    { href: '/community', label: 'Community', icon: MessageSquareIcon },
-    { href: '/settings', label: 'Menu', icon: MenuIcon },
-  ];
-
-  return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border-default bg-bg-primary/95 backdrop-blur-sm md:hidden" aria-label="Bottom navigation">
-      <div className="grid grid-cols-5">
-        {items.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={cn(
-              'flex flex-col items-center gap-1 px-2 py-2 text-xs font-medium transition-colors',
-              pathname === item.href
-                ? 'text-accent-blue'
-                : 'text-text-muted hover:text-text-primary'
-            )}
-            aria-current={pathname === item.href ? 'page' : undefined}
-          >
-            <item.icon className="w-5 h-5" aria-hidden="true" />
-            <span>{item.label}</span>
-          </Link>
-        ))}
-      </div>
-    </nav>
-  );
+  if (!user) return null;
+  const items = [PRIMARY_ITEMS[0], PRIMARY_ITEMS[1], PRIMARY_ITEMS[2], PRIMARY_ITEMS[4], WORKSPACE_ITEMS[4]];
+  return <nav className="mobile-bottom-nav lg:hidden" aria-label="Bottom navigation">{items.map(item => { const active = pathname === item.href; return <Link key={item.href} href={item.href} className={cn('mobile-nav-link', active && 'text-cyan-700')} aria-current={active ? 'page' : undefined}><item.icon className="h-5 w-5" /><span>{item.label.replace(' Engine', '')}</span></Link>; })}</nav>;
 }
 
-function HomeIcon({ className }: { className?: string }) {
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
-}
-function NewspaperIcon({ className }: { className?: string }) {
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 00-2-2H9a2 2 0 00-2 2v9a2 2 0 002 2h2m-4-4h.01" /></svg>;
-}
-function BookmarkIcon({ className }: { className?: string }) {
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" /></svg>;
-}
-function MessageSquareIcon({ className }: { className?: string }) {
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
-}
-function MenuIcon({ className }: { className?: string }) {
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>;
+export function AppSearch() {
+  return <label className="app-search"><Search className="h-4 w-4" /><span className="sr-only">Search Ventro</span><input type="search" placeholder="Search a VC, YC company, theme, or round" /></label>;
 }

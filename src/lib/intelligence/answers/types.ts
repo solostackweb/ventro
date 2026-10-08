@@ -13,6 +13,7 @@ export interface AnswerFilters {
 }
 
 export interface AnswerCitation {
+  id?: string;
   stance: CitationStance;
   label?: string;
   claimId?: string;

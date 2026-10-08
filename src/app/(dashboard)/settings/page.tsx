@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/Button';
@@ -44,11 +44,16 @@ const STAGE_OPTIONS = [
 
 export default function SettingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'billing' | 'personalization' | 'alerts'>('profile');
+  const requestedTab = searchParams.get('tab');
+  const initialTab = requestedTab === 'access' ? 'billing' : requestedTab;
+  const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'billing' | 'personalization' | 'alerts'>(
+    initialTab === 'security' || initialTab === 'billing' || initialTab === 'personalization' || initialTab === 'alerts' ? initialTab : 'profile'
+  );
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form states
@@ -58,6 +63,8 @@ export default function SettingsPage() {
   const [stages, setStages] = useState<Stage[]>([]);
   const [followedFunds, setFollowedFunds] = useState<string[]>([]);
   const [followedCompanies, setFollowedCompanies] = useState<string[]>([]);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [emailVerified, setEmailVerified] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -66,6 +73,7 @@ export default function SettingsPage() {
         router.push('/login?redirect=/settings');
         return;
       }
+      setEmailVerified(Boolean(user.email_confirmed_at));
       const { data, error } = await supabase
         .from('user_profiles')
         .select('*')
@@ -146,6 +154,34 @@ export default function SettingsPage() {
     setSaving(false);
   };
 
+  const handleSignOutAll = async () => {
+    setSaving(true);
+    const { error } = await supabase.auth.signOut({ scope: 'global' });
+    if (error) {
+      setMessage({ type: 'error', text: error.message });
+      setSaving(false);
+      return;
+    }
+    router.push('/login?message=signed-out-all');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmation !== 'DELETE MY ACCOUNT') return;
+    setSaving(true);
+    const response = await fetch('/api/account/delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation: deleteConfirmation }),
+    });
+    if (!response.ok) {
+      const result = await response.json() as { error?: string };
+      setMessage({ type: 'error', text: result.error || 'Account deletion failed' });
+      setSaving(false);
+      return;
+    }
+    router.push('/?account=deleted');
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -211,11 +247,16 @@ export default function SettingsPage() {
               { id: 'profile', label: 'Profile' },
               { id: 'personalization', label: 'Personalization' },
               { id: 'alerts', label: 'Alerts' },
+              { id: 'security', label: 'Security' },
               { id: 'billing', label: 'Billing' },
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => {
+                  const nextTab = tab.id as 'profile' | 'security' | 'billing' | 'personalization' | 'alerts';
+                  setActiveTab(nextTab);
+                  router.replace(`/settings?tab=${nextTab}`, { scroll: false });
+                }}
                 className={cn(
                   'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
                   activeTab === tab.id
@@ -502,12 +543,32 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* Billing Tab */}
+        {activeTab === 'security' && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader><h2 className="text-lg font-semibold">Identity and password</h2></CardHeader>
+              <CardContent className="space-y-5">
+                <div className="flex flex-col justify-between gap-4 border-b border-border-default pb-5 sm:flex-row sm:items-center"><div><p className="font-medium">Email status</p><p className="mt-1 text-sm text-text-muted">{profile.email}</p></div><Badge variant={emailVerified ? 'verified' : 'partial'} dot>{emailVerified ? 'Verified' : 'Verification required'}</Badge></div>
+                <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><p className="font-medium">Password</p><p className="mt-1 text-sm text-text-muted">Supabase sends a secure recovery link to your email.</p></div><Link href="/reset-password"><Button variant="secondary">Change password</Button></Link></div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader><h2 className="text-lg font-semibold">Sessions</h2></CardHeader>
+              <CardContent><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><p className="font-medium">Active sessions</p><p className="mt-1 text-sm text-text-muted">End all Supabase sessions, including this device.</p></div><Button variant="secondary" loading={saving} onClick={handleSignOutAll}>Sign out everywhere</Button></div></CardContent>
+            </Card>
+            <Card className="border-red-300">
+              <CardHeader><h2 className="text-lg font-semibold text-accent-red">Delete account</h2></CardHeader>
+              <CardContent className="space-y-4"><p className="text-sm leading-6 text-text-secondary">This permanently deletes your authentication account and cascades through private profile data. Type <strong>DELETE MY ACCOUNT</strong> to confirm.</p><Input label="Confirmation" value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" /><Button variant="danger" disabled={deleteConfirmation !== 'DELETE MY ACCOUNT'} loading={saving} onClick={handleDeleteAccount}>Permanently delete account</Button></CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Access Tab */}
         {activeTab === 'billing' && (
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <h2 className="text-lg font-semibold">Subscription</h2>
+                <h2 className="text-lg font-semibold">Access</h2>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="p-4 bg-bg-secondary rounded-lg">
@@ -530,9 +591,9 @@ export default function SettingsPage() {
 
                 {profile.entitlement !== 'subscribed' && (
                   <div className="border-t border-border-default pt-4">
-                    <h3 className="font-semibold mb-3">Upgrade to Pro</h3>
+                    <h3 className="font-semibold mb-3">Paid access is coming later</h3>
                     <p className="text-text-secondary mb-4">
-                      Get full access to investor theses, round details, patterns, alerts, and community.
+                      Payments, checkout, invoices, and provider webhooks are disabled. Your preview or student-trial state is managed independently.
                     </p>
                     <div className="grid sm:grid-cols-2 gap-4">
                       <Card>

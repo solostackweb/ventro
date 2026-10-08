@@ -18,9 +18,9 @@ export default async function DashboardLayout({
   const profile = await getProfile(user.id);
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen bg-ink-950 lg:pl-[236px]">
       <Header user={{ email: user.email!, entitlement: profile?.entitlement || 'preview' }} />
-      <main className="flex-1">{children}</main>
+      <main className="app-main min-h-screen">{children}</main>
       <MobileBottomNav user={{ entitlement: profile?.entitlement || 'preview' }} />
     </div>
   );

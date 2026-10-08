@@ -45,6 +45,7 @@ function mapSnapshot(row: Row): AnswerSnapshotRecord {
       metrics: section.metrics ?? {},
       whyThis: section.why_this ?? {},
       citations: asArray<Row>(section.answer_snapshot_citations).map(citation => ({
+        id: citation.id,
         stance: citation.stance,
         label: citation.label ?? undefined,
         claimId: citation.claim_id ?? undefined,
