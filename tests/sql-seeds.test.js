@@ -9,7 +9,7 @@ const COLUMNS = [
 ];
 
 const ALLOWED_VALUES = {
-  category: ['vc_blog', 'company_blog', 'news_aggregator', 'government', 'developer_platform', 'yc', 'search'],
+  category: ['vc_blog', 'corporate', 'company_blog', 'news_aggregator', 'government', 'developer_platform', 'yc', 'search'],
   access_method: ['rss', 'api', 'html', 'sitemap', 'search'],
   auth_required: ['none', 'api_key', 'oauth', 'login'],
   robots_txt_allows: ['yes', 'no', 'conditional'],
@@ -50,13 +50,7 @@ function splitSqlValues(tuple) {
   return values;
 }
 
-function parseConnectorRows(sql) {
-  const valuesMarker = /\)\s*VALUES/i.exec(sql);
-  if (!valuesMarker) throw new Error('Could not find source_connectors VALUES clause');
-
-  const valuesStart = valuesMarker.index + valuesMarker[0].length;
-  const valuesEnd = sql.indexOf(';', valuesStart);
-  const valuesSection = sql.slice(valuesStart, valuesEnd).replace(/--.*$/gm, '');
+function parseSqlTuples(valuesSection) {
   const tuples = [];
   let start = -1;
   let depth = 0;
@@ -82,17 +76,53 @@ function parseConnectorRows(sql) {
     }
   }
 
+  return tuples;
+}
+
+function findUnquotedSemicolon(sql, start) {
+  let quoted = false;
+
+  for (let index = start; index < sql.length; index += 1) {
+    const character = sql[index];
+    const next = sql[index + 1];
+
+    if (character === "'" && quoted && next === "'") {
+      index += 1;
+      continue;
+    }
+    if (character === "'") quoted = !quoted;
+    if (!quoted && character === ';') return index;
+  }
+
+  throw new Error('Could not find end of source_connectors INSERT statement');
+}
+
+function parseConnectorRows(sql) {
+  const valuesMarker = /\)\s*VALUES/i.exec(sql);
+  if (!valuesMarker) throw new Error('Could not find source_connectors VALUES clause');
+
+  const valuesStart = valuesMarker.index + valuesMarker[0].length;
+  const valuesEnd = findUnquotedSemicolon(sql, valuesStart);
+  const valuesSection = sql
+    .slice(valuesStart, valuesEnd)
+    .replace(/--.*$/gm, '')
+    .replace(/\s+ON CONFLICT[\s\S]*$/i, '');
+  const tuples = parseSqlTuples(valuesSection);
+
   return tuples.map((tuple) => Object.fromEntries(
     splitSqlValues(tuple).map((value, index) => [COLUMNS[index], value.replace(/^'|'$/g, '')])
   ));
 }
 
 describe('source connector seed', () => {
-  const seedPath = path.resolve(__dirname, '../supabase/seed_source_connectors.sql');
-  const rows = parseConnectorRows(fs.readFileSync(seedPath, 'utf8'));
+  const seedPaths = [
+    path.resolve(__dirname, '../supabase/seed_source_connectors.sql'),
+    path.resolve(__dirname, '../supabase/seed_source_connectors_extended.sql'),
+  ];
+  const rows = seedPaths.flatMap((seedPath) => parseConnectorRows(fs.readFileSync(seedPath, 'utf8')));
 
   it('contains complete rows', () => {
-    expect(rows.length).toBeGreaterThan(0);
+    expect(rows).toHaveLength(69);
     rows.forEach((row) => expect(Object.keys(row)).toHaveLength(COLUMNS.length));
   });
 
@@ -100,6 +130,51 @@ describe('source connector seed', () => {
     rows.forEach((row) => {
       expect(allowed).toContain(row[column]);
     });
+  });
+
+  it('allows every seeded category in the final hosted schema', () => {
+    const migration = fs.readFileSync(
+      path.resolve(__dirname, '../supabase/migrations/20261008040000_align_source_connector_categories.sql'),
+      'utf8'
+    );
+    const seededCategories = [...new Set(rows.map((row) => row.category))];
+
+    seededCategories.forEach((category) => expect(migration).toContain(`'${category}'`));
+  });
+});
+
+describe('company seed', () => {
+  const sql = fs.readFileSync(path.resolve(__dirname, '../supabase/seed_companies.sql'), 'utf8');
+  const allowedStages = [
+    'pre_seed', 'seed', 'series_a', 'series_b', 'series_c', 'series_d', 'series_e',
+    'growth', 'public', 'ipo', 'acquisition', 'grant', 'debt', 'convertible', 'safe', 'other',
+  ];
+
+  it('uses only canonical stage values accepted by the final schema', () => {
+    const statements = sql.match(/INSERT INTO companies[\s\S]*?;/gi) || [];
+    expect(statements.length).toBeGreaterThan(0);
+
+    for (const statement of statements) {
+      const valuesMarker = /\)\s*VALUES/i.exec(statement);
+      expect(valuesMarker).not.toBeNull();
+      const valuesSection = statement.slice(valuesMarker.index + valuesMarker[0].length, -1);
+
+      for (const tuple of parseSqlTuples(valuesSection)) {
+        const values = splitSqlValues(tuple).map((value) => value.replace(/^'|'$/g, ''));
+        if (values[6].toUpperCase() !== 'NULL') expect(allowedStages).toContain(values[6]);
+        if (values[9].toUpperCase() !== 'NULL') expect(allowedStages).toContain(values[9]);
+      }
+    }
+  });
+
+  it('widens the legacy company constraints before hosted seeds run', () => {
+    const migration = fs.readFileSync(
+      path.resolve(__dirname, '../supabase/migrations/20261008030000_align_company_stage_constraints.sql'),
+      'utf8'
+    );
+
+    expect(migration).toMatch(/companies_latest_round_stage_check[\s\S]*?'series_d'[\s\S]*?'series_e'/i);
+    expect(migration).toMatch(/ALTER TABLE public\.investments[\s\S]*?investments_round_stage_check[\s\S]*?'series_d'[\s\S]*?'series_e'/i);
   });
 });
 

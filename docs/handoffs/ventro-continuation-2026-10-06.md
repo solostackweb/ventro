@@ -2093,3 +2093,31 @@ Browser QA concern:
 - Therefore no rendered-browser screenshot is claimed. Use the route and viewport checklist in `docs/designs/checkpoint-4-application-audit.md` in a normal browser or deployed preview.
 
 Status: `DONE_WITH_CONCERNS`. Code, tests, lint, typecheck, and production build pass. The remaining concern is rendered browser verification. Checkpoint 3's hosted migration and real-data answer computation still need to be completed before the dashboard can show real published answers; honest empty states appear until then. Payments remain deferred.
+## Continuation Update — Hosted ingestion rollout diagnosis (2026-10-08)
+
+- Read-only hosted checks confirmed: `source_connectors=0`, `source_archive=0`, `document_versions=0`, `stories=0`, `funding_rounds=0`, `funds=0`, `yc_batches=0`, `answer_snapshots=2`, and the configured Cloudflare R2 bucket contains `0` objects.
+- Root cause: the hosted database was reset with `--no-seed`. The worker loads only `approved` rows from `source_connectors`, so an empty connector table produces no fetches and therefore no R2 uploads.
+- The repository seed chain is enabled in `supabase/config.toml` and ordered as companies → funds → source connectors → extended source connectors → YC batches. It defines 40 unique connector IDs, of which the approved connectors are eligible for ingestion.
+- Production bootstrap order after seeding: manually dispatch `full_refresh` with blank source scope and `max_stages=8`; then `thesis_extraction` with `max_stages=2`; then `pattern_detection` with `max_stages=1`. A separate `funding_extraction` dispatch is not required because `full_refresh` already runs extract → resolve → verify → publish. Every dispatch currently refreshes the 90-day answer snapshots.
+- Runtime concurrency is fixed at one stage per worker and GitHub Actions uses one concurrency group per pipeline type. There is no `max_instances` input. Do not launch duplicate runs of the same pipeline type; let each finish before starting the next.
+- Rollout concern: API connector seed `notes` are human-readable strings, while `fetchAPI()` parses every string as JSON. Hacker News, GitHub, Hugging Face, Tavily, and Firecrawl sources can therefore fail until that contract is repaired. Firecrawl also has no fetcher case. RSS sources can still populate the initial feed after seeding.
+- GitHub Actions secret presence could not be inspected because GitHub CLI is not installed on this machine. Before dispatch, manually confirm the repository Actions secrets listed in `.github/workflows/scheduled-ingestion.yml`, especially Supabase and R2 credentials.
+
+## Continuation Update — Hosted seed stage repair (2026-10-08)
+
+- The first seeded hosted reset failed on `companies_latest_round_stage_check` because `seed_companies.sql` contains legitimate Series D/E values while the legacy company constraints stopped at Series C.
+- Added active migration `20261008030000_align_company_stage_constraints.sql`. It aligns `companies.stage`, `companies.latest_round_stage`, and `company_fund_relationships.round_stage` with the canonical application/funding-stage vocabulary.
+- Normalized the two seed-only labels: Run:ai uses canonical `acquisition` instead of `acquired`; Midjourney uses `other` while retaining its bootstrapped status in the description.
+- Synchronized `supabase/schema.sql` and added company-stage seed regression coverage to `tests/sql-seeds.test.js`.
+- Verification: direct seed/migration contract passed; focused SQL seed suite passed 12/12; `git diff --check` found no whitespace errors. The linked Supabase dry run was not executed because the command approval service hit its usage limit.
+- Next manual action: rerun `npx supabase db reset --linked`. The new migration runs before the configured seed chain.
+- Follow-up correction: the first repair draft targeted a nonexistent `company_fund_relationships` relation. The baseline relation is `public.investments`; migration `20261008030000` now drops/recreates `investments_round_stage_check` on that actual table, and the regression assertion requires the real relation name.
+
+## Continuation Update — Extended connector seed repair (2026-10-08)
+
+- The next hosted reset reached `seed_source_connectors_extended.sql` and failed because its corporate-investor sources use category `corporate`, which the legacy `source_connectors_category_check` omitted.
+- Added migration `20261008040000_align_source_connector_categories.sql`, synchronized `supabase/schema.sql`, and made `corporate` a first-class source category.
+- Expanded `tests/sql-seeds.test.js` to validate both the primary and extended connector seed files; previously it only checked the primary file and could not catch this mismatch.
+- Next manual action remains `npx supabase db reset --linked`; migration `20261008040000` must appear before seeding begins.
+- Follow-up seed correction: `yc-directory` in the extended seed used `commercial_use_allowed='unknown'`; the canonical constraint uses `unclear`, matching the primary seed. The extended row now uses `unclear`.
+- Root test defect fixed: the connector-seed parser previously treated a semicolon inside a quoted notes field as the end of the SQL statement, so it silently validated only the first part of the extended seed. It now finds only an unquoted statement terminator and therefore validates all connector rows.

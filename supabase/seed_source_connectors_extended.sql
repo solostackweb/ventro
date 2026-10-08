@@ -165,7 +165,7 @@ INSERT INTO source_connectors (
  'Feed: https://www.ycombinator.com/blog/feed.xml'),
 
 ('yc-directory', 'YC Company Directory', 'yc', 'https://ycombinator.com/companies', 'html', 'none',
- '10/min', 'conditional', 'https://ycombinator.com/terms', 'unknown', true, 'unknown', 90,
+ '10/min', 'conditional', 'https://ycombinator.com/terms', 'unknown', true, 'unclear', 90,
  ARRAY['portfolio', 'team', 'round'], 'on_demand', 'ingestion-team', 'pending_review', '2026-09-30',
  'MUST verify ToS before automated import. Manual curation only for Phase 1.'),
 
