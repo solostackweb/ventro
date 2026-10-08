@@ -14,6 +14,7 @@ import { runStoryClustering } from '@/lib/ingestion/story-clustering';
 import { extractFundingEvidence } from '@/lib/ingestion/funding-extractor';
 import { detectPatterns } from '@/lib/ingestion/pattern-detector';
 import { extractStatedThesisForAllFunds, computeObservedThesisForAllFunds } from '@/lib/ingestion/thesis-extractor';
+import { materializeStatedThesisRecords, materializeObservedThesisRecords } from '@/lib/intelligence/answers/thesis-materializer';
 import { evidenceCore } from '@/lib/intelligence/evidence/with-repository';
 import crypto from 'crypto';
 import { throwIfLeaseAborted } from './lease-client';
@@ -253,7 +254,12 @@ registerStage({ pipelineType: 'funding_extraction', stageName: 'extract', defini
 const thesisExtractHandler = async (ctx: StageHandlerContext): Promise<StageResult> => {
   assertLeaseActive(ctx);
   ctx.logger.info('Running stated thesis extraction');
-  try { await extractStatedThesisForAllFunds(); assertLeaseActive(ctx); return { outputRef: { stated_thesis_extraction_completed: true }, itemsProcessed: 1, itemsSucceeded: 1, itemsFailed: 0, costUsd: 0 }; }
+  try {
+    await extractStatedThesisForAllFunds();
+    const statedRecords = await materializeStatedThesisRecords();
+    assertLeaseActive(ctx);
+    return { outputRef: { stated_thesis_extraction_completed: true, stated_records: statedRecords }, itemsProcessed: statedRecords, itemsSucceeded: statedRecords, itemsFailed: 0, costUsd: 0 };
+  }
   catch (error) { ctx.logger.error('Stated thesis extraction failed', { error: error instanceof Error ? error.message : 'Unknown' }); throw error; }
 };
 
@@ -262,7 +268,12 @@ registerStage({ pipelineType: 'thesis_extraction', stageName: 'extract', definit
 const thesisVerifyHandler = async (ctx: StageHandlerContext): Promise<StageResult> => {
   assertLeaseActive(ctx);
   ctx.logger.info('Running observed thesis computation');
-  try { await computeObservedThesisForAllFunds(); assertLeaseActive(ctx); return { outputRef: { observed_thesis_computation_completed: true }, itemsProcessed: 1, itemsSucceeded: 1, itemsFailed: 0, costUsd: 0 }; }
+  try {
+    await computeObservedThesisForAllFunds();
+    const observedRecords = await materializeObservedThesisRecords();
+    assertLeaseActive(ctx);
+    return { outputRef: { observed_thesis_computation_completed: true, observed_records: observedRecords }, itemsProcessed: observedRecords, itemsSucceeded: observedRecords, itemsFailed: 0, costUsd: 0 };
+  }
   catch (error) { ctx.logger.error('Observed thesis computation failed', { error: error instanceof Error ? error.message : 'Unknown' }); throw error; }
 };
 

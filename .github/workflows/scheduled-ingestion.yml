@@ -67,7 +67,23 @@ jobs:
           PIPELINE_TYPE="${{ github.event.inputs.pipeline_type || 'news_ingestion' }}"
           SOURCE_SCOPE="${{ github.event.inputs.source_scope || '' }}"
           MAX_STAGES="${{ github.event.inputs.max_stages || '10' }}"
-          npm run pipeline:worker -- --type="$PIPELINE_TYPE" --scope="$SOURCE_SCOPE" --max-stages="$MAX_STAGES"
+          ARGS=(--type="$PIPELINE_TYPE" --max-stages="$MAX_STAGES")
+          if [ -n "$SOURCE_SCOPE" ]; then ARGS+=(--scope="$SOURCE_SCOPE"); fi
+          npm run pipeline:worker -- "${ARGS[@]}"
+
+      - name: Run daily thesis and pattern intelligence
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +'%H')" = "02" ]; then
+            npm run pipeline:worker -- --once --type=thesis_extraction --max-stages=2
+            npm run pipeline:worker -- --once --type=pattern_detection --max-stages=1
+          fi
+
+      - name: Refresh 90-day intelligence answers
+        run: |
+          PERIOD_END="$(date -u +'%Y-%m-%dT00:00:00Z')"
+          PERIOD_START="$(date -u -d '90 days ago' +'%Y-%m-%dT00:00:00Z')"
+          npm run answers:compute -- --period-start="$PERIOD_START" --period-end="$PERIOD_END"
 
       - name: Upload logs on failure
         if: failure()

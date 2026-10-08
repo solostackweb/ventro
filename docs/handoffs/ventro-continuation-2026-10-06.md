@@ -2017,3 +2017,44 @@ Every checkpoint report must include:
 ## Final Product Test
 
 The final beta should let a student choose an AI domain, geography, stage, and time window, then answer both core questions in under five minutes. The student should be able to explain why the answer was produced, inspect the investments/theses/patterns behind it, open the original sources, recognize uncertainty and missing coverage, save useful research, and return later without juggling multiple external sources.
+
+## Continuation Update — Checkpoint 3 Implementation (2026-10-08)
+
+Checkpoint 3 implementation is complete locally in the main Codex chat. Do not rerun Prompt C in another coding agent against this working tree.
+
+Implemented locally so far:
+
+- Added pending migration `supabase/migrations/20261008020000_answer_intelligence_contracts.sql`.
+- Added immutable answer snapshots, structured sections, normalized citations, thesis history, pattern evidence metadata, RLS/service-role boundaries, idempotent persistence, and supersession.
+- Added deterministic investing-now and market-demand aggregation with equal-window comparison, disclosed/undisclosed separation, coverage adjustment, confidence, caveats, and counter-evidence.
+- Added strict stated-versus-observed thesis eligibility and evidence-backed automatic pattern publication.
+- Added optional provider-neutral narration with deterministic fallback and citation-completeness validation.
+- Added both-answer, detail, citation drill-down, facets, admin recompute, and preference-reset APIs.
+- Added a bounded `answers:compute` command and GitHub Actions refresh so production operation does not depend on the local machine.
+- Added Checkpoint 3 unit/contract/evaluation suites. Current targeted result: 6 suites and 41 tests passing.
+
+Verification completed:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 220 existing warnings.
+- `npx jest --runInBand`: 41 suites passed, 1 Docker-only database suite skipped; 338 tests passed and 22 database tests skipped.
+- `npm run build`: passed; 32 pages generated. The first sandboxed attempts hit a disposable `.next` OneDrive lock and blocked Google Fonts network access; the clean escalated build passed.
+- `node scripts/compute-answer-snapshots.mjs --help`: passed without credentials.
+- `npx supabase db push --dry-run`: passed and lists only `20261008020000_answer_intelligence_contracts.sql`.
+- `npx supabase db lint --linked`: passed with `No schema errors found`, confirming the hosted Checkpoint 2 repair is clean.
+- `npx supabase migration list --linked` was separately attempted but Supabase's temporary login role hit repeated SASL authentication failures/circuit breaking. This does not contradict the successful linked dry-run and linked lint, but the user should rerun it after the temporary block clears.
+
+Status: `DONE_WITH_CONCERNS`. The Checkpoint 3 migration has not been pushed, and its database function cannot be executed locally because Docker is unavailable. The user must run the hosted push, linked lint, and a bounded real-data computation before Checkpoint 4. The successful dry-run proves the Checkpoint 2 hosted repair is already applied because only the Checkpoint 3 migration remains pending.
+
+Manual next steps:
+
+```powershell
+npx supabase db push
+npx supabase migration list --linked
+npx supabase db lint --linked
+npm run pipeline:worker -- --once --type=thesis_extraction --max-stages=2
+npm run pipeline:worker -- --once --type=pattern_detection --max-stages=1
+npm run answers:compute -- --period-start="2026-07-01T00:00:00Z" --period-end="2026-10-01T00:00:00Z"
+```
+
+Use dates appropriate to the current 90-day window. Confirm both rows exist in `answer_snapshots`, every material section has citations, and no production fixture/fabricated data was inserted. Payments remain disabled. Checkpoint 4 visual redesign has not started.

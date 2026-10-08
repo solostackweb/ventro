@@ -35,10 +35,11 @@ Two separate tables with clear type distinction:
 - Coverage caveats: "Based on X investments over Y period; Z% of portfolio"
 - Never claims contradiction when coverage incomplete
 
-## Extraction Pipeline (Future)
-- Stated: LLM with schema-bound extraction → attributable claims → human review → publish
-- Observed: Deterministic computation on verified `fund_portfolio` + `investments`
-- Version history for both types
+## Extraction Pipeline (Checkpoint 3)
+- Stated: only published `thesis_statement` claims with exact evidence spans from official source connectors are materialized into `thesis_records`.
+- Observed: deterministic theme computation uses verified rounds that themselves have published claim evidence.
+- Both kinds use input fingerprints, confidence/coverage fields, caveats, theme-change summaries, normalized claim links, and supersession history.
+- Automatic publication is evidence-policy driven; it does not depend on routine manual approval.
 
 ## Consequences
 - Zero stated theses from non-official sources
@@ -47,6 +48,7 @@ Two separate tables with clear type distinction:
 - Prevents "investor said X" when they only did X
 
 ## Implementation Files
-- Existing: `supabase/schema.sql` tables `stated_thesis`, `observed_thesis`
-- Future: `src/lib/ingestion/thesis-extractor.ts` rewrite for attributable claims
-- API: New comparison endpoint
+- Legacy compatibility: `stated_thesis` and `observed_thesis` remain for existing pages.
+- Canonical intelligence history: `thesis_records` and `thesis_record_claims`.
+- Materializer: `src/lib/intelligence/answers/thesis-materializer.ts`.
+- Answer APIs keep stated and observed sections visibly separate.

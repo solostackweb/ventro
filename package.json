@@ -15,6 +15,7 @@
     "test:db": "jest --runInBand tests/database-integration.test.js",
     "ingest:scheduled": "node scripts/run-ingestion.mjs",
     "pipeline:worker": "node scripts/pipeline-worker.mjs",
+    "answers:compute": "node scripts/compute-answer-snapshots.mjs",
     "test:watch": "jest --watch"
   },
   "dependencies": {

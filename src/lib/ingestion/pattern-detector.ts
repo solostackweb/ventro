@@ -1,4 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
+import { fingerprint } from '@/lib/intelligence/answers/hash';
 
 interface PatternCandidate {
   name: string;
@@ -19,6 +21,7 @@ interface PatternCandidate {
 }
 
 interface QualifyingEvent {
+  round_id: string;
   date: string;
   company_id: string;
   company_name: string;
@@ -129,6 +132,7 @@ function detectFundingSurge(
           distinct_companies: companies.size,
           distinct_funds: funds.size,
           qualifying_events: themeEvents.map(e => ({
+            round_id: e.round_id,
             date: e.announced_date,
             company_id: e.company_id,
             company_name: e.company_name,
@@ -173,6 +177,7 @@ function detectFundingSurge(
           distinct_companies: companies.size,
           distinct_funds: funds.size,
           qualifying_events: themeEvents.map(e => ({
+            round_id: e.round_id,
             date: e.announced_date,
             company_id: e.company_id,
             company_name: e.company_name,
@@ -245,6 +250,7 @@ function detectInvestorConcentration(
         distinct_companies: new Set(data.events.map(e => e.company_id)).size,
         distinct_funds: 1,
         qualifying_events: data.events.map(e => ({
+          round_id: e.round_id,
           date: e.announced_date,
           company_id: e.company_id,
           company_name: e.company_name,
@@ -322,6 +328,7 @@ function detectStageShift(
         distinct_companies: companies.size,
         distinct_funds: funds.size,
         qualifying_events: stageEvents.map(e => ({
+          round_id: e.round_id,
           date: e.announced_date,
           company_id: e.company_id,
           company_name: e.company_name,
@@ -374,9 +381,19 @@ export async function detectPatterns(): Promise<void> {
 
   console.log(`Detected ${allPatterns.length} pattern candidates`);
 
-  // Upsert patterns
+  // Persist deterministic pattern records, then attach only published claim evidence.
   for (const pattern of allPatterns) {
-    const { error } = await supabase
+    const roundIds = [...new Set(pattern.qualifying_events.map(event => event.round_id))];
+    const duration = new Date(pattern.time_window_end).getTime() - new Date(pattern.time_window_start).getTime();
+    const baselineWindowStart = new Date(new Date(pattern.time_window_start).getTime() - duration).toISOString();
+    const inputFingerprint = fingerprint({
+      name: pattern.name,
+      windowStart: pattern.time_window_start,
+      windowEnd: pattern.time_window_end,
+      roundIds: [...roundIds].sort(),
+      methodology: 'deterministic-patterns-v1',
+    });
+    const { data: stored, error } = await supabase
       .from('patterns')
       .upsert({
         name: pattern.name,
@@ -392,12 +409,95 @@ export async function detectPatterns(): Promise<void> {
         counterexamples: pattern.counterexamples,
         confidence: pattern.confidence,
         coverage_notes: pattern.coverage_notes,
-        status: pattern.status,
+        status: 'candidate',
         source_links: pattern.source_links,
-      }, { onConflict: 'name,time_window_start,time_window_end' });
+        pattern_type: pattern.name.toLowerCase().includes('stage') ? 'stage_shift' : pattern.name.toLowerCase().includes('activity') ? 'investor_concentration' : 'funding_acceleration',
+        filter_dimensions: {},
+        baseline_window_start: baselineWindowStart,
+        baseline_window_end: pattern.time_window_start,
+        sample_size: roundIds.length,
+        coverage_metrics: { evidenced_rounds: 0, qualifying_rounds: roundIds.length },
+        sensitivity: { minimum_events: 5, minimum_change_percentage: 50 },
+        methodology_version: 'deterministic-patterns-v1',
+        input_fingerprint: inputFingerprint,
+        publication_reason: 'Awaiting evidence eligibility evaluation',
+      }, { onConflict: 'input_fingerprint' })
+      .select('id')
+      .single();
 
     if (error) {
       console.error(`Failed to upsert pattern ${pattern.name}:`, error.message);
+      continue;
+    }
+
+    const { data: bindings, error: bindingError } = roundIds.length
+      ? await supabase.from('claim_bindings').select(`
+          claim_id,
+          claims!inner(
+            id, publication_status,
+            claim_evidence(
+              id, stance, document_version_id,
+              document_versions(source_documents(source_id, domain, source_connectors(independence_group)))
+            )
+          )
+        `).eq('record_type', 'funding_round').in('record_id', roundIds).eq('claims.publication_status', 'published').limit(5000)
+      : { data: [], error: null };
+    if (bindingError) {
+      console.error(`Failed to load evidence for pattern ${pattern.name}:`, bindingError.message);
+      continue;
+    }
+    const citations = (bindings ?? []).flatMap((binding: any) =>
+      (binding.claims?.claim_evidence ?? [])
+        .filter((evidence: any) => evidence.stance === 'supports')
+        .map((evidence: any) => ({
+          pattern_id: stored.id,
+          claim_id: binding.claim_id,
+          claim_evidence_id: evidence.id,
+          stance: 'supports',
+          independence_group: evidence.document_versions?.source_documents?.source_connectors?.independence_group
+            ?? evidence.document_versions?.source_documents?.domain
+            ?? evidence.document_version_id,
+        })),
+    );
+    const uniqueCitations = [...new Map(citations.map((citation: any) => [`${citation.claim_id}:supports`, citation])).values()];
+    const independenceGroups = new Set(uniqueCitations.map((citation: any) => citation.independence_group));
+    const { error: deleteCitationError } = await supabase.from('pattern_citations').delete().eq('pattern_id', stored.id);
+    if (deleteCitationError) throw new Error(`Failed to replace pattern citations: ${deleteCitationError.message}`);
+    if (uniqueCitations.length) {
+      const { error: citationError } = await supabase.from('pattern_citations').insert(uniqueCitations.map((citation: any) => ({
+        pattern_id: citation.pattern_id,
+        claim_id: citation.claim_id,
+        claim_evidence_id: citation.claim_evidence_id,
+        stance: citation.stance,
+      })));
+      if (citationError) throw new Error(`Failed to persist pattern citations: ${citationError.message}`);
+    }
+    const publishable = roundIds.length >= 5 && pattern.distinct_companies >= 3 && pattern.distinct_funds >= 2 && independenceGroups.size >= 2 && uniqueCitations.length >= 3;
+    let previousPatternId: string | null = null;
+    if (publishable) {
+      const { data: previousPattern, error: previousPatternError } = await supabase.from('patterns').select('id')
+        .eq('name', pattern.name).eq('status', 'published').neq('id', stored.id)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (previousPatternError) throw new Error(`Failed to load pattern history: ${previousPatternError.message}`);
+      previousPatternId = previousPattern?.id ?? null;
+    }
+    const { error: publishError } = await supabase.from('patterns').update({
+      status: publishable ? 'published' : 'candidate',
+      qualifying_claim_ids: uniqueCitations.map((citation: any) => citation.claim_id),
+      independent_source_count: independenceGroups.size,
+      coverage_metrics: {
+        evidenced_claims: uniqueCitations.length,
+        qualifying_rounds: roundIds.length,
+        evidence_per_round: roundIds.length ? uniqueCitations.length / roundIds.length : 0,
+      },
+      publication_reason: publishable
+        ? 'Published automatically: deterministic sample, breadth, independence, and claim-evidence thresholds passed'
+        : 'Candidate only: one or more deterministic evidence thresholds were not met',
+    }).eq('id', stored.id);
+    if (publishError) throw new Error(`Failed to finalize pattern ${pattern.name}: ${publishError.message}`);
+    if (previousPatternId) {
+      const { error: retireError } = await supabase.from('patterns').update({ status: 'retired' }).eq('id', previousPatternId);
+      if (retireError) throw new Error(`Failed to retire superseded pattern ${pattern.name}: ${retireError.message}`);
     }
   }
 
