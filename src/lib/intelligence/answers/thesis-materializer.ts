@@ -44,7 +44,7 @@ async function replaceThesisClaims(thesisRecordId: string, links: Array<{ claim_
 export async function materializeStatedThesisRecords(): Promise<number> {
   const { data, error } = await ingestionSupabase.from('claims').select(`
     id, subject_id, value_json, extraction_confidence, resolution_confidence,
-    claim_evidence(
+    claim_evidence!claim_evidence_claim_id_fkey(
       id, stance,
       document_versions!inner(source_documents!inner(source_connectors!inner(is_official)))
     )
@@ -107,7 +107,7 @@ export async function materializeObservedThesisRecords(): Promise<number> {
   const events = (data ?? []) as Row[];
   const roundIds = [...new Set(events.map(event => event.round_id))];
   const { data: bindings, error: bindingError } = roundIds.length
-    ? await ingestionSupabase.from('claim_bindings').select('record_id,claim_id,claims!inner(id,publication_status,claim_evidence(id,stance))')
+    ? await ingestionSupabase.from('claim_bindings').select('record_id,claim_id,claims!inner(id,publication_status,claim_evidence!claim_evidence_claim_id_fkey(id,stance))')
       .eq('record_type', 'funding_round').in('record_id', roundIds).eq('claims.publication_status', 'published').limit(20000)
     : { data: [], error: null };
   if (bindingError) throw new Error(`OBSERVED_THESIS_EVIDENCE_FAILED:${bindingError.message}`);

@@ -32,7 +32,9 @@ concurrency:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # A cold full refresh uploads and persists thousands of source documents.
+    # Subsequent runs are faster, but the bootstrap must have enough headroom.
+    timeout-minutes: 60
     
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}

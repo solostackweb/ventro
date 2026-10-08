@@ -2150,3 +2150,47 @@ Verification:
 Remaining verification concern:
 
 - Authenticated rendered-browser QA still requires a valid signed-in browser session or deployed preview. The development server was healthy on Windows, but the Codex in-app browser timed out against both `localhost:3000` and the advertised LAN address, matching the earlier environment limitation. Static contracts, TypeScript, Jest, Tailwind/webpack compilation, and the production route build pass, but no new authenticated screenshot is claimed from this environment.
+
+## Continuation Update — Hosted publication pipeline repair (2026-10-08)
+
+Read-only hosted diagnostics established that ingestion did fetch and archive real material: `source_archive=2331`, `document_versions=2331`, and Cloudflare R2 contained roughly 1.32k objects. The empty product was caused downstream, not by an empty crawler.
+
+Confirmed root causes:
+
+- The latest `news_ingestion` run reached `normalize` but failed with `column source_archive.processed does not exist`.
+- The deployed feed query failed with `column stories.summary_kind does not exist`.
+- Story clustering also writes `image_url`, `source_urls`, `supporting_sources`, and `updated_at`; those fields were absent from the hosted baseline as well.
+- Thesis extraction failed because PostgREST found more than one relationship path between `claims` and `claim_evidence`.
+- A cancelled GitHub worker left the full-refresh fetch attempt leased. The SQL lease function can reclaim expired leases and due retries, but the TypeScript orchestrator stopped before calling it whenever an attempt was `leased` or `retry_wait`.
+- The GitHub job timeout was 25 minutes, which was insufficient for the initial multi-thousand-object hosted bootstrap.
+
+Implemented locally:
+
+- Added pending migration `supabase/migrations/20261008050000_repair_research_publication_contracts.sql` with the missing archive/story fields, the unprocessed-work index, constraints, and a PostgREST schema reload notification.
+- Synchronized the relevant story and source-archive contracts in `supabase/schema.sql`.
+- Disambiguated both thesis evidence embeds with `claim_evidence!claim_evidence_claim_id_fkey`.
+- Changed bounded orchestration so the database lease function decides whether leased/retry-wait work is eligible; expired leases and due retries can now resume after worker cancellation.
+- Increased the hosted ingestion workflow timeout from 25 to 60 minutes.
+- Increased one normalize stage's bounded drain from 1,000 to 3,000 archive items so the current 2,331-item cold-start backlog can publish in one successful hosted run.
+- Aligned news-ingestion idempotency with the hourly schedule; news now receives one stable run identity per UTC hour while expensive derived pipelines remain daily.
+- Added regression coverage for expired-lease recovery, due/future retries, required publication columns, relationship disambiguation, and workflow headroom.
+
+Verification:
+
+- Focused pipeline suite: 13/13 tests passed.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 197 existing warnings.
+- Full Jest run: 43 suites passed, 1 Docker-only database suite skipped; 376 tests passed and 22 skipped.
+- `npm run build`: passed after clearing the disposable `.next` cache and allowing Google Fonts network access; 34 application pages generated.
+- `npx supabase db push --dry-run`: passed and showed only `20261008050000_repair_research_publication_contracts.sql` pending.
+
+Manual rollout order:
+
+1. Run `npx supabase db push`.
+2. Commit/push the repair so GitHub Actions and Vercel deploy the updated orchestrator/materializer/workflow.
+3. After deployment, manually dispatch `Scheduled Ingestion Pipeline` with `pipeline_type=full_refresh`, blank `source_scope`, and `max_stages=8`. Do not start another same-type run in parallel.
+4. When it succeeds, dispatch `thesis_extraction` with blank scope and `max_stages=2`.
+5. When it succeeds, dispatch `pattern_detection` with blank scope and `max_stages=1`.
+6. Verify News, Investments, Theses, Patterns, and Today. The workflow refreshes the 90-day answer snapshots after each successful dispatch.
+
+Status: `DONE_WITH_CONCERNS`. The code repair is complete and verified, but the hosted migration has not been pushed and the fixed commit has not been deployed. The live app will remain empty until those two external rollout steps and the workflow sequence complete.

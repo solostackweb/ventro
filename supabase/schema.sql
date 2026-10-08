@@ -189,15 +189,20 @@ CREATE TABLE public.stories (
   content_hash TEXT NOT NULL,
   headline TEXT NOT NULL,
   summary TEXT,
+  summary_kind TEXT NOT NULL DEFAULT 'none' CHECK (summary_kind IN ('none', 'source_excerpt', 'article_summary')),
+  image_url TEXT,
   event_date TIMESTAMPTZ,
   publisher TEXT,
   source_count INTEGER DEFAULT 1,
+  source_urls TEXT[] NOT NULL DEFAULT '{}',
+  supporting_sources TEXT[] NOT NULL DEFAULT '{}',
   ai_topics TEXT[] DEFAULT '{}',
   geography TEXT CHECK (geography IN ('us', 'india', 'eu', 'israel', 'canada', 'uk', 'sea', 'global')),
   event_type TEXT CHECK (event_type IN ('funding', 'launch', 'partnership', 'research', 'acquisition', 'other')),
   verification_label TEXT DEFAULT 'unverified' CHECK (verification_label IN ('verified', 'partial', 'unverified', 'conflicted')),
   last_checked_at TIMESTAMPTZ DEFAULT NOW(),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Story-company associations
@@ -1078,18 +1083,23 @@ CREATE INDEX idx_document_versions_hash ON public.document_versions(content_hash
 CREATE TABLE public.source_archive (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   source_id TEXT NOT NULL REFERENCES public.source_connectors(source_id),
-  source_document_id UUID REFERENCES public.source_documents(id) ON DELETE SET NULL,
-  document_version_id UUID REFERENCES public.document_versions(id) ON DELETE SET NULL,
+  url TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  r2_key TEXT NOT NULL,
-  size_bytes BIGINT NOT NULL,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  fetched_at TIMESTAMPTZ DEFAULT NOW(),
+  r2_key TEXT,
+  r2_url TEXT,
+  raw_content TEXT,
+  metadata JSONB,
+  permissions JSONB,
+  document_version_id UUID REFERENCES public.document_versions(id),
+  processed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(source_id, content_hash)
 );
 
 CREATE INDEX idx_source_archive_source ON public.source_archive(source_id);
-CREATE INDEX idx_source_archive_doc ON public.source_archive(source_document_id);
 CREATE INDEX idx_source_archive_version ON public.source_archive(document_version_id);
+CREATE INDEX idx_source_archive_unprocessed ON public.source_archive(fetched_at, id) WHERE processed = FALSE;
 
 -- Claims table
 CREATE TABLE public.claims (

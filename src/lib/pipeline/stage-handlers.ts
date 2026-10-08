@@ -136,7 +136,10 @@ const normalizeHandler = async (ctx: StageHandlerContext): Promise<StageResult> 
   assertLeaseActive(ctx);
   ctx.logger.info('Running story clustering');
   let totalClustered = 0, batchCount = 0;
-  const maxBatches = 10;
+  // Drain a cold-start backlog of up to 3,000 archived items in one hosted
+  // run. The workflow has a 60-minute cap and the loop still exits as soon as
+  // the current backlog is exhausted.
+  const maxBatches = 30;
   for (let batch = 0; batch < maxBatches; batch++) {
     assertLeaseActive(ctx);
     try {

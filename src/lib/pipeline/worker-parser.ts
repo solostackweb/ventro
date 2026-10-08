@@ -13,9 +13,12 @@ export interface WorkerArgs {
   help: boolean;
 }
 
-export async function generateIdempotencyKey(pipelineType: string, scope: string): Promise<string> {
+export async function generateIdempotencyKey(pipelineType: string, scope: string, now = new Date()): Promise<string> {
   const crypto = await import('crypto');
-  const timestamp = new Date().toISOString().split('T')[0];
+  const isoTimestamp = now.toISOString();
+  // News is scheduled hourly, so its identity must permit one run per hour.
+  // Expensive derived-intelligence pipelines remain bounded to one run per day.
+  const timestamp = pipelineType === 'news_ingestion' ? isoTimestamp.slice(0, 13) : isoTimestamp.slice(0, 10);
   const scopeHash = crypto.createHash('sha256').update(scope || 'all').digest('hex').slice(0, 16);
   return `${pipelineType}:scheduled:${scopeHash}:${timestamp}:1.0`;
 }

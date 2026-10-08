@@ -3,7 +3,7 @@
  * Tests the real CLI parser and help command.
  */
 
-import { parseArgs, validateArgs, printHelp } from '@/lib/pipeline/worker-parser';
+import { generateIdempotencyKey, parseArgs, validateArgs, printHelp } from '@/lib/pipeline/worker-parser';
 import { runPipelineWorker } from '@/lib/pipeline/worker-main';
 
 describe('Worker CLI Parser', () => {
@@ -101,6 +101,22 @@ describe('Worker CLI Parser', () => {
   describe('printHelp', () => {
     it('prints usage without throwing', () => {
       expect(() => printHelp()).not.toThrow();
+    });
+  });
+
+  describe('scheduled run identity', () => {
+    it('permits one news ingestion run per UTC hour', async () => {
+      const first = await generateIdempotencyKey('news_ingestion', 'all', new Date('2026-10-08T10:05:00Z'));
+      const sameHour = await generateIdempotencyKey('news_ingestion', 'all', new Date('2026-10-08T10:59:59Z'));
+      const nextHour = await generateIdempotencyKey('news_ingestion', 'all', new Date('2026-10-08T11:00:00Z'));
+      expect(first).toBe(sameHour);
+      expect(nextHour).not.toBe(first);
+    });
+
+    it('keeps derived intelligence pipelines idempotent for the UTC day', async () => {
+      const morning = await generateIdempotencyKey('full_refresh', 'all', new Date('2026-10-08T01:00:00Z'));
+      const evening = await generateIdempotencyKey('full_refresh', 'all', new Date('2026-10-08T23:59:59Z'));
+      expect(morning).toBe(evening);
     });
   });
 

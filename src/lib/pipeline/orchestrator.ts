@@ -416,7 +416,11 @@ export class PipelineOrchestrator {
             .sort((a, b) => b.attempt_number - a.attempt_number)[0];
         }
 
-        if (!attempt || attempt.status === 'leased' || attempt.status === 'retry_wait') break;
+        // Always ask the database lease function about non-terminal work. It is
+        // the source of truth for retry timing and expired-lease recovery. A
+        // worker may have been cancelled after persisting a leased/retry_wait
+        // attempt, and short-circuiting here would strand that run forever.
+        if (!attempt) break;
 
         const result = await this.processStage(run_id, stage);
         if (!result.success) {

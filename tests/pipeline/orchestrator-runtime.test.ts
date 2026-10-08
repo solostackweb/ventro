@@ -13,6 +13,8 @@ import type { LeaseResult, StageAttempt, StageName } from '@/lib/pipeline/types'
 import { loadApprovedConnectors, runIngestionForSource } from '@/lib/ingestion/rss-fetcher';
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
 import '@/lib/pipeline/stage-handlers';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 const selectedSource = { source_id: 'sequoia-capital-blog', name: 'Sequoia', cadence: 'daily', access_method: 'rss' };
 const unrelatedSource = { source_id: 'other-source', name: 'Other', cadence: 'daily', access_method: 'rss' };
@@ -59,7 +61,13 @@ function createRuntimeHarness(initialAttempts: StageAttempt[] = []) {
   const leaseClient = {
     getWorkerId: jest.fn(() => 'worker-1'),
     acquireLease: jest.fn(async (input: any): Promise<LeaseResult | null> => {
-      const item = attempts.find((candidate) => candidate.status === 'pending' && (!input.allowed_stage_names || input.allowed_stage_names.includes(candidate.stage_name)));
+      const now = Date.now();
+      const item = attempts.find((candidate) => {
+        const allowed = !input.allowed_stage_names || input.allowed_stage_names.includes(candidate.stage_name);
+        const isDueRetry = candidate.status === 'retry_wait' && (!candidate.retry_after || Date.parse(candidate.retry_after) <= now);
+        const isExpiredLease = candidate.status === 'leased' && Boolean(candidate.lease_expires_at) && Date.parse(candidate.lease_expires_at!) <= now;
+        return allowed && (candidate.status === 'pending' || isDueRetry || isExpiredLease);
+      });
       if (!item) return null;
       item.status = 'leased';
       item.lease_token = `token-${item.stage_name}`;
@@ -164,11 +172,38 @@ describe('PipelineOrchestrator production flow', () => {
   it('retry-wait work remains nonterminal instead of failing the run', async () => {
     const discover = attempt('discover', 'completed', {}, { sources: [selectedSource], scope: selectedSource.source_id });
     const fetch = attempt('fetch', 'retry_wait', { sources: [selectedSource], scope: selectedSource.source_id });
+    fetch.retry_after = new Date(Date.now() + 60_000).toISOString();
     const runtime = createRuntimeHarness([discover, fetch]);
     const result = await runtime.orchestrator.runPipelineBounded('news_ingestion', 'scheduled', {}, 3, 'ignored', 'run-1');
     expect(result.processed).toBe(0);
     expect(runtime.pipelineClient.finalizeRun).not.toHaveBeenCalled();
     expect(runtime.run.status).toBe('running');
+  });
+
+  it('reclaims an expired lease after a cancelled worker', async () => {
+    const discover = attempt('discover', 'completed', {}, { sources: [selectedSource], scope: selectedSource.source_id });
+    const fetch = attempt('fetch', 'leased', { sources: [selectedSource], scope: selectedSource.source_id });
+    fetch.lease_expires_at = new Date(Date.now() - 60_000).toISOString();
+    fetch.lease_token = 'abandoned-token';
+    const runtime = createRuntimeHarness([discover, fetch]);
+
+    const result = await runtime.orchestrator.runPipelineBounded('news_ingestion', 'scheduled', {}, 1, 'ignored', 'run-1');
+
+    expect(result.processed).toBe(1);
+    expect(fetch.status).toBe('completed');
+    expect(runtime.leaseClient.acquireLease).toHaveBeenCalledWith(expect.objectContaining({ pipeline_run_id: 'run-1', allowed_stage_names: ['fetch'] }));
+  });
+
+  it('retries due retry-wait work instead of stranding the run', async () => {
+    const discover = attempt('discover', 'completed', {}, { sources: [selectedSource], scope: selectedSource.source_id });
+    const fetch = attempt('fetch', 'retry_wait', { sources: [selectedSource], scope: selectedSource.source_id });
+    fetch.retry_after = new Date(Date.now() - 60_000).toISOString();
+    const runtime = createRuntimeHarness([discover, fetch]);
+
+    const result = await runtime.orchestrator.runPipelineBounded('news_ingestion', 'scheduled', {}, 1, 'ignored', 'run-1');
+
+    expect(result.processed).toBe(1);
+    expect(fetch.status).toBe('completed');
   });
 
   it('processLeasedWork acquires exactly once and completes that attempt', async () => {
@@ -177,5 +212,28 @@ describe('PipelineOrchestrator production flow', () => {
     expect(processed).toBe(1);
     expect(runtime.leaseClient.acquireLease).toHaveBeenCalledTimes(1);
     expect(runtime.leaseClient.completeAttempt).toHaveBeenCalledWith(expect.objectContaining({ attempt_id: runtime.attempts[0].id }));
+  });
+});
+
+describe('hosted research publication contracts', () => {
+  const migration = readFileSync(resolve(__dirname, '../../supabase/migrations/20261008050000_repair_research_publication_contracts.sql'), 'utf8');
+  const thesisMaterializer = readFileSync(resolve(__dirname, '../../src/lib/intelligence/answers/thesis-materializer.ts'), 'utf8');
+  const stageHandlers = readFileSync(resolve(__dirname, '../../src/lib/pipeline/stage-handlers.ts'), 'utf8');
+  const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/scheduled-ingestion.yml'), 'utf8');
+
+  it('adds every archive/story column required by clustering and the feed API', () => {
+    expect(migration).toMatch(/ADD COLUMN IF NOT EXISTS processed BOOLEAN NOT NULL DEFAULT FALSE/);
+    for (const column of ['summary_kind', 'image_url', 'source_urls', 'supporting_sources', 'updated_at']) {
+      expect(migration).toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}\\b`));
+    }
+  });
+
+  it('disambiguates the direct claim-to-evidence relationship', () => {
+    expect(thesisMaterializer.match(/claim_evidence!claim_evidence_claim_id_fkey/g)).toHaveLength(2);
+  });
+
+  it('gives a cold hosted refresh enough workflow headroom', () => {
+    expect(workflow).toMatch(/timeout-minutes:\s*60/);
+    expect(stageHandlers).toMatch(/const maxBatches = 30/);
   });
 });
