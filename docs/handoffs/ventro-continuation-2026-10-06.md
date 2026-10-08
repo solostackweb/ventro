@@ -2357,3 +2357,30 @@ Operational notes:
 - The gstack investigation preamble could not run because Git Bash failed on Windows with `NtCreateDirectoryObject ... 0xC0000022`; investigation proceeded in the skill's documented degraded mode, so no gstack session telemetry was recorded.
 
 Status: `IMPLEMENTED_AND_VERIFIED_LOCALLY — EXTERNAL_ROLLOUT_REQUIRED`. The live screens will remain unchanged until the migration is applied, this revision is deployed, and the `entity_sync` plus downstream workflows run.
+
+### Hosted entity-sync enum failure (2026-10-09)
+
+The first manual `entity_sync` GitHub Actions run failed immediately with `invalid input value for enum pipeline_type: "entity_sync"`. A linked migration-history check confirmed configuration drift: migration `20261009010000_entity_sync_and_round_visibility.sql` exists locally but has no remote entry. The deployed worker therefore knows the new pipeline type while hosted Supabase still has the older enum.
+
+Resolution: run `npx supabase db push` from the linked Ventro repository, verify `20261009010000` appears in both Local and Remote columns with `npx supabase migration list --linked`, and then rerun `entity_sync` with `source_scope=yc` and `max_stages=1`. No code change or database reset is required.
+
+### Answer-refresh relationship ambiguity repair (2026-10-09)
+
+After the YC `entity_sync` worker completed, the workflow failed in the separate `Refresh 90-day intelligence answers` step with `ANSWER_EVIDENCE_QUERY_FAILED: Could not embed because more than one relationship was found for 'claims' and 'claim_evidence'`.
+
+Root cause: `src/lib/intelligence/answers/repository.ts` used an unqualified nested PostgREST embed from `claims` to `claim_evidence`. The schema now exposes enough evidence/citation relationships that PostgREST requires the explicit foreign-key relationship name. The thesis materializer already used the correct `claim_evidence!claim_evidence_claim_id_fkey` convention, but the answer repository and pattern detector had not been updated.
+
+Implemented:
+
+- Qualified the answer repository embed with `claim_evidence!claim_evidence_claim_id_fkey`.
+- Qualified the same relationship plus the document-version/source-document relationship chain in the pattern detector to prevent the next downstream run from failing for the same reason.
+- Added source-contract regression coverage for these explicit relationship paths.
+
+Verification:
+
+- `npm run typecheck`: passed.
+- Targeted evidence/materializer suites: 2 suites and 17 tests passed.
+- Full Jest run: 46 suites and 401 tests passed; 1 Docker-only suite and 22 tests skipped.
+- Exact hosted reproduction passed: `node --env-file=.env.local scripts/compute-answer-snapshots.mjs --period-start=2026-07-11T00:00:00Z --period-end=2026-10-09T00:00:00Z` completed and created both `investing_now` and `market_demand` snapshots.
+
+Required rollout: commit and push this relationship-hint repair, wait for the GitHub Actions revision to update, then continue with the VC `entity_sync` run (`source_scope=vc`, `max_stages=1`). The failed YC run does not need to be repeated solely because its trailing answer-refresh step failed; YC entity synchronization itself completed successfully.

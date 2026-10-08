@@ -32,4 +32,13 @@ describe('research publication repair', () => {
     expect(materializer).toMatch(/source_documents!document_versions_source_document_id_fkey/);
     expect(materializer).toMatch(/source_connectors!source_documents_source_id_fkey/);
   });
+
+  it('uses explicit foreign-key paths in answer and pattern evidence queries', () => {
+    const answerRepository = read('src/lib/intelligence/answers/repository.ts');
+    const patternDetector = read('src/lib/ingestion/pattern-detector.ts');
+    expect(answerRepository).toMatch(/claim_evidence!claim_evidence_claim_id_fkey/);
+    expect(patternDetector).toMatch(/claim_evidence!claim_evidence_claim_id_fkey/);
+    expect(patternDetector).toMatch(/document_versions!claim_evidence_document_version_id_fkey/);
+    expect(patternDetector).toMatch(/source_documents!document_versions_source_document_id_fkey/);
+  });
 });

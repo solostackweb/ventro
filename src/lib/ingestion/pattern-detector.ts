@@ -435,9 +435,14 @@ export async function detectPatterns(): Promise<void> {
           claim_id,
           claims!inner(
             id, publication_status,
-            claim_evidence(
+            claim_evidence!claim_evidence_claim_id_fkey(
               id, stance, document_version_id,
-              document_versions(source_documents(source_id, domain, source_connectors(independence_group)))
+              document_versions!claim_evidence_document_version_id_fkey(
+                source_documents!document_versions_source_document_id_fkey(
+                  source_id, domain,
+                  source_connectors!source_documents_source_id_fkey(independence_group)
+                )
+              )
             )
           )
         `).eq('record_type', 'funding_round').in('record_id', roundIds).eq('claims.publication_status', 'published').limit(5000)

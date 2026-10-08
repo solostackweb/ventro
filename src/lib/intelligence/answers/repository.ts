@@ -153,7 +153,7 @@ export async function loadAnswerInputBundle(filters: AnswerFilters): Promise<Ans
   if (recordIds.length > 0) {
     const { data, error } = await ingestionSupabase.from('claim_bindings').select(`
       id, record_type, record_id, field_name,
-      claims!inner(id, publication_status, claim_evidence(id, stance))
+      claims!inner(id, publication_status, claim_evidence!claim_evidence_claim_id_fkey(id, stance))
     `).in('record_id', recordIds).eq('claims.publication_status', 'published').limit(5000);
     if (error) throw new Error(`ANSWER_EVIDENCE_QUERY_FAILED:${error.message}`);
     bindings = asArray<Row>(data);
