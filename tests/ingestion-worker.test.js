@@ -13,9 +13,9 @@ describe('scheduled ingestion entry point', () => {
 
   it('runs a real TypeScript worker rather than a non-existent compiled module', () => {
     const workflow = fs.readFileSync(path.join(root, '.github/workflows/scheduled-ingestion.yml'), 'utf8');
-    expect(workflow).toMatch(/npm run ingest:scheduled/);
+    expect(workflow).toMatch(/npm run pipeline:worker/);
     expect(workflow).not.toMatch(/require\('\.\/lib\/ingestion\/rss-fetcher'\)/);
-    expect(fs.existsSync(path.join(root, 'scripts/run-ingestion.mjs'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'scripts/pipeline-worker.mjs'))).toBe(true);
   });
 
   it('wires collection, persistent fetch logs, and story clustering together', () => {

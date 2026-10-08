@@ -126,7 +126,7 @@ async function loadNamedEntities(table: 'companies' | 'funds'): Promise<NamedEnt
 }
 
 async function computeContentHash(content: string): Promise<string> {
-  return crypto.createHash('sha256').update(content).digest('hex').slice(0, 32);
+  return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 function calculateTitleSimilarity(title1: string, title2: string): number {
@@ -337,15 +337,38 @@ async function saveClusteredStories(clusters: ClusteredStory[]): Promise<void> {
       if (linkError) throw new Error(`Story investor link failed: ${linkError.message}`);
     }
 
-    // Store source URLs
-    for (const url of cluster.source_urls) {
-      const { error: linkError } = await supabase
-        .from('story_sources')
-        .upsert({
-          story_id: story.id,
-          source_url: url,
-        }, { onConflict: 'story_id,source_url' });
-      if (linkError) throw new Error(`Story source link failed: ${linkError.message}`);
+    // Store source URLs with batched document_version_id lookup
+    // Build a map of (source_id, url) -> document_version_id from source_archive
+    const sourceUrlPairs = cluster.source_urls.map((url, idx) => ({
+      url,
+      source_id: cluster.supporting_sources[idx],
+    })).filter(p => p.source_id);
+
+    if (sourceUrlPairs.length > 0) {
+      const { data: archiveItems } = await supabase
+        .from('source_archive')
+        .select('source_id, url, document_version_id')
+        .in('source_id', [...new Set(sourceUrlPairs.map(p => p.source_id))])
+        .in('url', [...new Set(sourceUrlPairs.map(p => p.url))]);
+
+      const archiveMap = new Map<string, string>();
+      for (const item of archiveItems || []) {
+        archiveMap.set(`${item.source_id}|${item.url}`, item.document_version_id);
+      }
+
+      for (const pair of sourceUrlPairs) {
+        const key = `${pair.source_id}|${pair.url}`;
+        const document_version_id = archiveMap.get(key) || null;
+
+        const { error: linkError } = await supabase
+          .from('story_sources')
+          .upsert({
+            story_id: story.id,
+            source_url: pair.url,
+            document_version_id,
+          }, { onConflict: 'story_id,source_url' });
+        if (linkError) throw new Error(`Story source link failed: ${linkError.message}`);
+      }
     }
   }
 }

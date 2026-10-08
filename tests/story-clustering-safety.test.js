@@ -3,6 +3,34 @@ const path = require('path');
 const vm = require('vm');
 const ts = require('typescript');
 
+function createQueryBuilder(data, error = null) {
+  const builder = {
+    select: () => builder,
+    eq: () => builder,
+    in: () => builder,
+    order: () => builder,
+    limit: () => builder,
+    range: () => builder,
+    upsert: () => builder,
+    update: () => builder,
+    single: async () => ({ data, error }),
+    maybeSingle: async () => ({ data, error }),
+    rpc: async () => ({ data: null, error: null }),
+    then: (onFulfilled) => Promise.resolve({ data, error }).then(onFulfilled),
+  };
+  
+  builder.limit = async () => ({ data, error });
+  builder.range = async () => ({ data, error });
+  builder.single = async () => ({ data, error });
+  builder.maybeSingle = async () => ({ data, error });
+  builder.in = () => builder;
+  builder.rpc = async () => ({ data: null, error: null });
+  builder.update = () => builder;
+  builder.then = (onFulfilled) => Promise.resolve({ data, error }).then(onFulfilled);
+  
+  return builder;
+}
+
 function loadClustering(supabase) {
   const file = path.join(__dirname, '../src/lib/ingestion/story-clustering.ts');
   const source = fs.readFileSync(file, 'utf8');
@@ -32,11 +60,7 @@ describe('story clustering data safety', () => {
       source_count: 1, source_urls: ['https://a.example/story'],
       supporting_sources: ['source-a'],
     };
-    const query = {
-      select: () => query,
-      order: () => query,
-      limit: async () => ({ data: [existing], error: null }),
-    };
+    const query = createQueryBuilder([existing]);
     const { clusterStories } = loadClustering({ from: () => query });
     const clusters = await clusterStories([{
       url: 'https://b.example/story', source_id: 'source-b',
@@ -53,11 +77,7 @@ describe('story clustering data safety', () => {
       canonical_url: 'https://a.example/story', headline: 'Existing headline', summary: '',
       source_count: 1, source_urls: ['https://a.example/story'], supporting_sources: ['source-a'],
     };
-    const query = {
-      select: () => query,
-      order: () => query,
-      limit: async () => ({ data: [existing], error: null }),
-    };
+    const query = createQueryBuilder([existing]);
     const { clusterStories } = loadClustering({ from: () => query });
     const clusters = await clusterStories([{
       url: 'https://a.example/story', source_id: 'source-a',
@@ -71,26 +91,18 @@ describe('story clustering data safety', () => {
 
   it('never acknowledges archive rows when story persistence fails', async () => {
     let acknowledged = false;
-    const archive = {
-      select: () => archive,
-      eq: () => archive,
-      limit: async () => ({ data: [{
-        id: 'archive-1', source_id: 'source-a', url: 'https://a.example/new',
-        raw_content: 'A new AI infrastructure announcement',
-        metadata: { title: 'A new AI infrastructure announcement' },
-      }], error: null }),
-      update: () => { acknowledged = true; return archive; },
-      in: async () => ({ error: null }),
-    };
-    const stories = {
-      select: () => stories,
-      order: () => stories,
-      limit: async () => ({ data: [], error: null }),
-      upsert: () => stories,
-      single: async () => ({ data: null, error: { message: 'database unavailable' } }),
-    };
-    const catalog = { select: () => catalog, order: () => catalog,
-      range: async () => ({ data: [], error: null }) };
+    const archive = createQueryBuilder([{
+      id: 'archive-1', source_id: 'source-a', url: 'https://a.example/new',
+      raw_content: 'A new AI infrastructure announcement',
+      metadata: { title: 'A new AI infrastructure announcement' },
+    }]);
+    archive.update = () => { acknowledged = true; return archive; };
+    
+    const stories = createQueryBuilder([]);
+    stories.upsert = () => stories;
+    stories.single = async () => ({ data: null, error: { message: 'database unavailable' } });
+    
+    const catalog = createQueryBuilder([]);
     const { runStoryClustering } = loadClustering({
       from: (table) => table === 'source_archive' ? archive
         : table === 'companies' || table === 'funds' ? catalog : stories,
@@ -102,30 +114,24 @@ describe('story clustering data safety', () => {
 
   it('persists a source matched to a database story without transient entity arrays', async () => {
     let acknowledged = false;
-    const archive = {
-      select: () => archive,
-      eq: () => archive,
-      limit: async () => ({ data: [{
-        id: 'archive-1', source_id: 'source-a', url: 'https://a.example/story',
-        raw_content: '', metadata: { title: 'Existing headline' },
-      }], error: null }),
-      update: () => archive,
-      in: async () => { acknowledged = true; return { error: null }; },
-    };
-    const stories = {
-      select: () => stories,
-      order: () => stories,
-      limit: async () => ({ data: [{
-        id: 'story-1', canonical_url: 'https://a.example/story',
-        headline: 'Existing headline', summary: '', source_count: 1,
-        source_urls: ['https://a.example/story'], supporting_sources: ['source-a'],
-      }], error: null }),
-      upsert: () => stories,
-      single: async () => ({ data: { id: 'story-1' }, error: null }),
-    };
+    const archive = createQueryBuilder([{
+      id: 'archive-1', source_id: 'source-a', url: 'https://a.example/story',
+      raw_content: '', metadata: { title: 'Existing headline' },
+    }]);
+    archive.update = () => archive;
+    archive.in = () => archive;
+    archive.eq = () => { acknowledged = true; return archive; };
+    
+    const stories = createQueryBuilder([{
+      id: 'story-1', canonical_url: 'https://a.example/story',
+      headline: 'Existing headline', summary: '', source_count: 1,
+      source_urls: ['https://a.example/story'], supporting_sources: ['source-a'],
+    }]);
+    stories.upsert = () => stories;
+    stories.single = async () => ({ data: { id: 'story-1' }, error: null });
+    
     const sourceLinks = { upsert: async () => ({ error: null }) };
-    const catalog = { select: () => catalog, order: () => catalog,
-      range: async () => ({ data: [], error: null }) };
+    const catalog = createQueryBuilder([]);
     const { runStoryClustering } = loadClustering({
       from: (table) => table === 'source_archive' ? archive
         : table === 'story_sources' ? sourceLinks

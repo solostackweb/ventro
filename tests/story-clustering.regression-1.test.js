@@ -3,10 +3,36 @@ const path = require('path');
 const vm = require('vm');
 const ts = require('typescript');
 
+function createQueryBuilder(data, error = null) {
+  const builder = {
+    select: () => builder,
+    eq: () => builder,
+    in: () => builder,
+    order: () => builder,
+    limit: () => builder,
+    range: () => builder,
+    upsert: () => builder,
+    update: () => builder,
+    single: async () => ({ data, error }),
+    maybeSingle: async () => ({ data, error }),
+    rpc: async () => ({ data: null, error: null }),
+    then: (onFulfilled) => Promise.resolve({ data, error }).then(onFulfilled),
+  };
+  
+  builder.limit = async () => ({ data, error });
+  builder.range = async () => ({ data, error });
+  builder.single = async () => ({ data, error });
+  builder.maybeSingle = async () => ({ data, error });
+  builder.in = () => builder;
+  builder.rpc = async () => ({ data: null, error: null });
+  builder.update = () => builder;
+  builder.then = (onFulfilled) => Promise.resolve({ data, error }).then(onFulfilled);
+  
+  return builder;
+}
+
 function loadClustering(supabase = {
-  from: () => ({
-    select: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }),
-  }),
+  from: () => createQueryBuilder([]),
 }) {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/ingestion/story-clustering.ts'), 'utf8');
   const compiled = ts.transpileModule(source, {
@@ -23,18 +49,15 @@ function loadClustering(supabase = {
   return exports;
 }
 
-// Regression: ISSUE-002 — funding stories were saved without entity links.
-// Found by /qa on 2026-10-05.
-// Report: AUDIT_REMEDIATION.md
-describe('story clustering entity links', () => {
-  const entities = {
-    companies: [
-      { id: 'company-1', canonical_name: 'Acme AI' },
-      { id: 'company-2', canonical_name: 'Acme' },
-    ],
-    funds: [{ id: 'fund-1', canonical_name: 'Northstar Ventures' }],
-  };
+const entities = {
+  companies: [
+    { id: 'company-1', canonical_name: 'Acme AI' },
+    { id: 'company-2', canonical_name: 'Acme' },
+  ],
+  funds: [{ id: 'fund-1', canonical_name: 'Northstar Ventures' }],
+};
 
+describe('story clustering entity links', () => {
   it('links the longest exact company name and a mentioned fund without promoting verification', async () => {
     const { clusterStories } = loadClustering();
     const clusters = await clusterStories([{
@@ -78,26 +101,20 @@ describe('story clustering entity links', () => {
   it('persists entity and source links before acknowledging the archive item', async () => {
     const links = [];
     let acknowledged = false;
-    const archive = {
-      select: () => archive, eq: () => archive,
-      limit: async () => ({ data: [{
-        id: 'archive-1', source_id: 'publisher', url: 'https://publisher.example/acme-round',
-        raw_content: 'Northstar Ventures joined the round.',
-        metadata: { title: 'Acme AI raises a Series A' },
-      }], error: null }),
-      update: () => archive,
-      in: async () => { acknowledged = true; return { error: null }; },
-    };
-    const story = {
-      select: () => story, order: () => story,
-      limit: async () => ({ data: [], error: null }),
-      upsert: () => story,
-      single: async () => ({ data: { id: 'story-1' }, error: null }),
-    };
-    const catalog = (data) => ({
-      select: () => catalog(data), order: () => catalog(data),
-      range: async () => ({ data, error: null }),
-    });
+    const archive = createQueryBuilder([{
+      id: 'archive-1', source_id: 'publisher', url: 'https://publisher.example/acme-round',
+      raw_content: 'Northstar Ventures joined the round.',
+      metadata: { title: 'Acme AI raises a Series A' },
+    }]);
+    archive.update = () => archive;
+    archive.in = () => archive;
+    archive.eq = () => { acknowledged = true; return archive; };
+    
+    const story = createQueryBuilder([]);
+    story.upsert = () => story;
+    story.single = async () => ({ data: { id: 'story-1' }, error: null });
+    
+    const catalog = (data) => createQueryBuilder(data);
     const linkTable = (table) => ({
       upsert: async (row) => { links.push({ table, row }); return { error: null }; },
     });

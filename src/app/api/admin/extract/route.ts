@@ -30,8 +30,8 @@ export async function POST(request: NextRequest) {
     const results: Record<string, any> = {};
     
     if (!type || type === 'funding') {
-      const { extractFundingEvents } = await import('@/lib/ingestion/funding-extractor');
-      await extractFundingEvents();
+      const { extractFundingEvidence } = await import('@/lib/ingestion/funding-extractor');
+      await extractFundingEvidence();
       results.funding = 'completed';
     }
     

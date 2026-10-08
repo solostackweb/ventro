@@ -5,6 +5,7 @@ import { uploadToR2, generateR2Key } from '@/lib/r2/client';
 import crypto from 'crypto';
 import { JSDOM } from 'jsdom';
 import { presentFeedItem } from './feed-presentation';
+import { evidenceCore } from '@/lib/intelligence/evidence/with-repository';
 
 const parser = new Parser({ customFields: { item: [
   ['media:content', 'media:content', { keepArray: true }],
@@ -148,7 +149,7 @@ async function fetchHTML(source: SourceConnector): Promise<FetchResult[]> {
         continue;
       }
 
-      const contentHash = crypto.createHash('sha256').update(extracted.content).digest('hex').slice(0, 32);
+      const contentHash = computeStableContentHash(extracted.content, url);
 
       results.push({
         source_id: source.source_id,
@@ -212,6 +213,17 @@ interface IngestionResult {
   latency_ms: number;
 }
 
+/**
+ * Compute stable content hash with URL-based fallback for empty content.
+ * This ensures distinct canonical URLs never collide even when content is empty (link_only).
+ * Returns full 64-char SHA-256 hex to match database schema and SQL function.
+ */
+function computeStableContentHash(content: string, url: string): string {
+  const canonicalUrl = evidenceCore.canonicalizeUrl(url).canonicalUrl;
+  const input = content && content.trim().length > 0 ? content : canonicalUrl;
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
 async function fetchRSS(source: SourceConnector): Promise<FetchResult[]> {
   const configuredFeed = typeof source.notes === 'string'
     ? source.notes.match(/Feed:\s*(https?:\/\/[^\s,;]+)/i)?.[1]
@@ -238,7 +250,7 @@ async function fetchRSS(source: SourceConnector): Promise<FetchResult[]> {
           : source.reuse_permission === 'summary_only'
             ? presentation.excerpt
             : '';
-        const contentHash = crypto.createHash('sha256').update(content || url).digest('hex').slice(0, 32);
+        const contentHash = computeStableContentHash(content, url);
 
         results.push({
           source_id: source.source_id,
@@ -277,39 +289,63 @@ async function fetchRSS(source: SourceConnector): Promise<FetchResult[]> {
 }
 
 async function storeFetchResults(results: FetchResult[]): Promise<{ new: number; updated: number }> {
-  const supabase = ingestionSupabase;
-  let newCount = 0;
-  let updatedCount = 0;
-  const hashesBySource = new Map<string, Set<string>>();
-
+  // Track all items by content_hash to count in-batch duplicates
+  const hashCounts = new Map<string, number>();
+  const firstResultByHash = new Map<string, FetchResult>();
   for (const result of results) {
+    const count = (hashCounts.get(result.content_hash) || 0) + 1;
+    hashCounts.set(result.content_hash, count);
+    if (!firstResultByHash.has(result.content_hash)) {
+      firstResultByHash.set(result.content_hash, result);
+    }
+  }
+  const uniqueResults = [...firstResultByHash.values()];
+
+  // Bounded batch prelookup for existing archive hashes
+  const hashesBySource = new Map<string, Set<string>>();
+  for (const result of uniqueResults) {
     if (!hashesBySource.has(result.source_id)) hashesBySource.set(result.source_id, new Set());
     hashesBySource.get(result.source_id)!.add(result.content_hash);
   }
 
-  const archivedHashes = new Map<string, Set<string>>();
+  const existingHashes = new Map<string, Set<string>>();
+  const supabase = ingestionSupabase;
   for (const [sourceId, hashes] of hashesBySource) {
-    const existingHashes = new Set<string>();
-    const allHashes = [...hashes];
-    for (let offset = 0; offset < allHashes.length; offset += 100) {
+    const hashArray = [...hashes];
+    // Process in chunks of 100 for bounded queries
+    for (let offset = 0; offset < hashArray.length; offset += 100) {
+      const chunk = hashArray.slice(offset, offset + 100);
       const { data, error } = await supabase
         .from('source_archive')
         .select('content_hash')
         .eq('source_id', sourceId)
-        .in('content_hash', allHashes.slice(offset, offset + 100));
+        .in('content_hash', chunk);
       if (error) throw new Error(`Archive lookup failed for ${sourceId}: ${error.message}`);
-      for (const row of data || []) existingHashes.add(row.content_hash);
+      for (const row of data || []) {
+        if (!existingHashes.has(sourceId)) existingHashes.set(sourceId, new Set());
+        existingHashes.get(sourceId)!.add(row.content_hash);
+      }
     }
-    archivedHashes.set(sourceId, existingHashes);
   }
 
-  for (const result of results) {
-    if (archivedHashes.get(result.source_id)!.has(result.content_hash)) {
-      updatedCount++;
+  let newCount = 0;
+  let updatedCount = 0;
+
+  for (const result of uniqueResults) {
+    const sourceHashes = existingHashes.get(result.source_id) || new Set();
+    const totalOccurrences = hashCounts.get(result.content_hash) || 1;
+    if (sourceHashes.has(result.content_hash)) {
+      // Already exists in archive: all occurrences count as updated
+      updatedCount += totalOccurrences;
       continue;
     }
+    // Not in archive - persist and count based on result
+    const { canonicalUrl, urlHash, domain } = evidenceCore.canonicalizeUrl(result.url);
+    const { normalizedText, checksum: normalizedChecksum } = evidenceCore.normalizeText(result.raw_content || '');
+    const contentHash = result.content_hash; // Already computed with stable identity rule
+    const archiveId = crypto.randomUUID();
 
-    const r2Key = generateR2Key(result.source_id, result.content_hash);
+    const r2Key = generateR2Key(result.source_id, contentHash);
     let r2Url: string | null = null;
     let storedR2Key: string | null = null;
 
@@ -317,7 +353,7 @@ async function storeFetchResults(results: FetchResult[]): Promise<{ new: number;
       const archivePayload = JSON.stringify({
         url: result.url,
         fetched_at: result.fetched_at,
-        content_hash: result.content_hash,
+        content_hash: contentHash,
         raw_content: result.raw_content,
         metadata: result.metadata,
         permissions: result.permissions,
@@ -325,7 +361,7 @@ async function storeFetchResults(results: FetchResult[]): Promise<{ new: number;
 
       const uploadResult = await uploadToR2(r2Key, archivePayload, 'application/json', {
         source_id: result.source_id,
-        content_hash: result.content_hash,
+        content_hash: contentHash,
         fetched_at: result.fetched_at,
       });
 
@@ -337,20 +373,46 @@ async function storeFetchResults(results: FetchResult[]): Promise<{ new: number;
       }
     }
 
-    const { error: insertError } = await supabase.from('source_archive').insert({
-      source_id: result.source_id,
-      url: result.url,
-      content_hash: result.content_hash,
-      fetched_at: result.fetched_at,
-      r2_key: storedR2Key,
-      r2_url: r2Url,
-      raw_content: result.permissions.can_store_raw ? result.raw_content : null,
-      metadata: result.metadata,
-      permissions: result.permissions,
-    });
-    if (insertError) throw new Error(`Archive insert failed for ${result.source_id}: ${insertError.message}`);
-    archivedHashes.get(result.source_id)!.add(result.content_hash);
-    newCount++;
+    try {
+      const persistResult = await evidenceCore.repository.persistDocumentVersion({
+        source_id: result.source_id,
+        canonical_url: canonicalUrl,
+        domain,
+        title: result.metadata.title || null,
+        publisher: result.metadata.publisher || null,
+        raw_content: result.raw_content || '',
+        normalized_text: normalizedText,
+        normalization_version: evidenceCore.NORMALIZATION_VERSION,
+        fetched_at: result.fetched_at,
+        published_at: result.metadata.published_at || null,
+        r2_key: storedR2Key,
+        r2_url: r2Url,
+        rights_snapshot: {
+          can_store_raw: result.permissions.can_store_raw,
+          can_store_full_text: result.permissions.can_store_full_text,
+          max_retention_days: result.permissions.max_retention_days,
+          attribution_required: result.permissions.attribution_required,
+        },
+        metadata: {
+          ...result.metadata,
+          content_hash: contentHash,
+          url_hash: urlHash,
+        },
+        archive_id: archiveId,
+      });
+
+      if (persistResult.isNewVersion) {
+        newCount += 1;
+        updatedCount += totalOccurrences - 1;
+        // Update local cache so subsequent items in same batch see it
+        if (!existingHashes.has(result.source_id)) existingHashes.set(result.source_id, new Set());
+        existingHashes.get(result.source_id)!.add(result.content_hash);
+      } else {
+        updatedCount += totalOccurrences;
+      }
+    } catch (error) {
+      throw new Error(`persistDocumentVersion failed for ${result.source_id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   return { new: newCount, updated: updatedCount };
@@ -414,7 +476,7 @@ async function fetchGitHubAPI(source: SourceConnector, config: GitHubAPIConfig):
 
         const title = `${event.repo?.name}: ${event.type.replace('Event', '')}`;
         const content = JSON.stringify(event.payload, null, 2);
-        const contentHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 32);
+        const contentHash = crypto.createHash('sha256').update(content).digest('hex');
         const url = `https://github.com/${event.repo?.name}`;
 
         results.push({
@@ -492,7 +554,7 @@ async function fetchHackerNewsAPI(source: SourceConnector, config: HackerNewsAPI
 
       if (!hasAITag && !hit._tags?.some((t: string) => tags.includes(t))) continue;
 
-      const contentHash = crypto.createHash('sha256').update(hit.story_text || title).digest('hex').slice(0, 32);
+      const contentHash = crypto.createHash('sha256').update(hit.story_text || title).digest('hex');
       const url = hit.url || `https://news.ycombinator.com/item?id=${hit.objectID}`;
 
       results.push({
@@ -541,7 +603,7 @@ async function fetchHuggingFaceAPI(source: SourceConnector, config: HuggingFaceA
       for (const item of items) {
         const title = `${type.slice(0, -1)}: ${item.id}`;
         const content = JSON.stringify(item, null, 2);
-        const contentHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 32);
+        const contentHash = crypto.createHash('sha256').update(content).digest('hex');
         const url = `https://huggingface.co/${item.id}`;
 
         results.push({
@@ -597,7 +659,7 @@ async function fetchSECAPI(source: SourceConnector, config: SECAPIConfig): Promi
 
         const title = `SEC Filing: ${filing.form} - ${data.name}`;
         const content = JSON.stringify(filing, null, 2);
-        const contentHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 32);
+        const contentHash = crypto.createHash('sha256').update(content).digest('hex');
         const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${filing.accessionNumber.replace(/-/g, '')}/${filing.primaryDocument}`;
 
         results.push({
@@ -662,7 +724,7 @@ async function fetchTavilyAPI(source: SourceConnector, config: TavilyAPIConfig):
       const data = await response.json();
 
       for (const result of data.results || []) {
-        const contentHash = crypto.createHash('sha256').update(result.content || '').digest('hex').slice(0, 32);
+        const contentHash = crypto.createHash('sha256').update(result.content || '').digest('hex');
 
         results.push({
           source_id: source.source_id,

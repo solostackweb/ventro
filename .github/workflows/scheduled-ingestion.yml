@@ -1,27 +1,38 @@
-name: Scheduled Ingestion
+name: Scheduled Ingestion Pipeline
 
 on:
   schedule:
-    # One hourly job also picks up daily/weekly sources at 02:00 UTC.
+    # Hourly job picks up hourly sources, plus daily/weekly at 02:00 UTC
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Run all sources or only process the archived backlog'
+      pipeline_type:
+        description: 'Pipeline type to run'
         type: choice
         options:
-          - full
-          - clustering
-        default: full
+          - news_ingestion
+          - funding_extraction
+          - thesis_extraction
+          - pattern_detection
+          - full_refresh
+        default: news_ingestion
+      source_scope:
+        description: 'Source scope (optional filter)'
+        type: string
+        required: false
+      max_stages:
+        description: 'Max stages to process per workflow run'
+        type: string
+        default: '10'
 
 concurrency:
-  group: scheduled-ingestion
+  group: scheduled-ingestion-${{ github.event.inputs.pipeline_type || 'news_ingestion' }}
   cancel-in-progress: false
 
 jobs:
-  ingestion:
+  pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
@@ -36,6 +47,7 @@ jobs:
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -50,23 +62,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run scheduled ingestion
-        if: github.event_name == 'schedule'
-        run: npm run ingest:scheduled
-
-      - name: Run manual ingestion
-        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'clustering'
-        run: npm run ingest:scheduled -- --all
-
-      - name: Process archived backlog
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'clustering'
-        run: npm run ingest:scheduled -- --cluster-only
+      - name: Run pipeline worker
+        run: |
+          PIPELINE_TYPE="${{ github.event.inputs.pipeline_type || 'news_ingestion' }}"
+          SOURCE_SCOPE="${{ github.event.inputs.source_scope || '' }}"
+          MAX_STAGES="${{ github.event.inputs.max_stages || '10' }}"
+          npm run pipeline:worker -- --type="$PIPELINE_TYPE" --scope="$SOURCE_SCOPE" --max-stages="$MAX_STAGES"
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ingestion-logs
+          name: pipeline-logs-${{ github.run_id }}
           path: |
             *.log
           retention-days: 7

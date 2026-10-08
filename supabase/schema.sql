@@ -737,7 +737,6 @@ DECLARE
   v_email TEXT;
   v_domain TEXT;
   v_profile RECORD;
-  v_result JSONB;
   v_issued_at TIMESTAMPTZ;
   v_expires_at TIMESTAMPTZ;
 BEGIN
@@ -835,7 +834,7 @@ BEGIN
   VALUES (v_user_id, v_profile.entitlement, 'student_trial', 'student_trial', 
           jsonb_build_object('trial_expires_at', v_expires_at, 'trial_issued_at', v_issued_at));
   
-  v_result := jsonb_build_object(
+  RETURN jsonb_build_object(
     'success', true,
     'code', 'TRIAL_ACTIVATED',
     'message', '20-day student trial activated',
@@ -843,14 +842,147 @@ BEGIN
     'trial_expires_at', v_expires_at,
     'trial_issued_at', v_issued_at
   );
-  
-  RETURN v_result;
 END;
 $$;
 
 -- Grant execute to authenticated users only
 REVOKE ALL ON FUNCTION public.activate_student_trial() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.activate_student_trial() TO authenticated;
+
+-- Server-managed admin membership and immutable review audit trail.
+CREATE TABLE public.admin_users (
+  user_id UUID PRIMARY KEY REFERENCES public.user_profiles(id) ON DELETE CASCADE,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE public.admin_users ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.admin_users FROM anon, authenticated;
+
+CREATE TABLE public.admin_review_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('story', 'funding_round', 'round_participant', 'pattern')),
+  item_id UUID NOT NULL,
+  reviewer_id UUID NOT NULL REFERENCES public.user_profiles(id),
+  previous_status TEXT NOT NULL,
+  new_status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  evidence_urls TEXT[] NOT NULL DEFAULT '{}',
+  reviewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX admin_review_events_item_idx
+  ON public.admin_review_events (item_kind, item_id, reviewed_at DESC);
+
+ALTER TABLE public.admin_review_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.admin_review_events FROM anon, authenticated;
+
+-- Authenticated admin-only review transition with an atomic audit event.
+CREATE OR REPLACE FUNCTION public.admin_review_candidate(
+  p_kind TEXT,
+  p_id UUID,
+  p_expected_status TEXT,
+  p_new_status TEXT,
+  p_reason TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_actor UUID := auth.uid();
+  v_table TEXT;
+  v_column TEXT;
+  v_old JSONB;
+  v_old_status TEXT;
+  v_urls TEXT[] := ARRAY[]::TEXT[];
+  v_event_id UUID;
+BEGIN
+  IF v_actor IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.admin_users WHERE user_id = v_actor
+  ) THEN
+    RAISE EXCEPTION 'Admin access required' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_id IS NULL OR p_expected_status IS NULL OR p_new_status IS NULL
+     OR LENGTH(TRIM(COALESCE(p_reason, ''))) < 10
+     OR LENGTH(p_reason) > 1000 THEN
+    RAISE EXCEPTION 'Review requires an item, expected state, target state, and 10-1000 character reason'
+      USING ERRCODE = '22023';
+  END IF;
+
+  CASE p_kind
+    WHEN 'story' THEN v_table := 'stories'; v_column := 'verification_label';
+    WHEN 'funding_round' THEN v_table := 'funding_rounds'; v_column := 'verification_status';
+    WHEN 'round_participant' THEN v_table := 'round_participants'; v_column := 'verification_status';
+    WHEN 'pattern' THEN v_table := 'patterns'; v_column := 'status';
+    ELSE RAISE EXCEPTION 'Unsupported review kind' USING ERRCODE = '22023';
+  END CASE;
+
+  EXECUTE FORMAT('SELECT TO_JSONB(t) FROM public.%I t WHERE id = $1 FOR UPDATE', v_table)
+    INTO v_old USING p_id;
+  IF v_old IS NULL THEN
+    RAISE EXCEPTION 'Review item not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  v_old_status := v_old ->> v_column;
+  IF v_old_status IS DISTINCT FROM p_expected_status THEN
+    RAISE EXCEPTION 'Review item changed; refresh the queue' USING ERRCODE = '40001';
+  END IF;
+
+  IF p_kind = 'pattern' THEN
+    IF NOT ((v_old_status = 'candidate' AND p_new_status IN ('published', 'rejected'))
+      OR (v_old_status = 'published' AND p_new_status = 'retired')
+      OR (v_old_status = 'corrected' AND p_new_status IN ('published', 'retired'))) THEN
+      RAISE EXCEPTION 'Invalid pattern review transition' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT COALESCE(ARRAY_AGG(VALUE), ARRAY[]::TEXT[]) INTO v_urls
+      FROM JSONB_ARRAY_ELEMENTS_TEXT(COALESCE(v_old -> 'source_links', '[]'::JSONB)) VALUE;
+    IF p_new_status = 'published' AND (
+      CARDINALITY(v_urls) = 0 OR JSONB_ARRAY_LENGTH(COALESCE(v_old -> 'qualifying_events', '[]'::JSONB)) = 0
+    ) THEN
+      RAISE EXCEPTION 'Pattern needs source links and qualifying events' USING ERRCODE = '22023';
+    END IF;
+  ELSE
+    IF p_new_status NOT IN ('verified', 'partial', 'unverified', 'conflicted')
+       OR p_new_status = v_old_status THEN
+      RAISE EXCEPTION 'Invalid verification transition' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT COALESCE(ARRAY_AGG(VALUE), ARRAY[]::TEXT[]) INTO v_urls
+      FROM JSONB_ARRAY_ELEMENTS_TEXT(COALESCE(v_old -> 'source_urls', '[]'::JSONB)) VALUE;
+    IF p_kind = 'story' AND CARDINALITY(v_urls) = 0
+       AND NULLIF(v_old ->> 'canonical_url', '') IS NOT NULL THEN
+      v_urls := ARRAY[v_old ->> 'canonical_url'];
+    END IF;
+    IF p_new_status IN ('verified', 'partial') AND CARDINALITY(v_urls) = 0 THEN
+      RAISE EXCEPTION 'Verified items require original source URLs' USING ERRCODE = '22023';
+    END IF;
+    IF p_kind = 'round_participant' AND p_new_status IN ('verified', 'partial')
+       AND COALESCE(v_old ->> 'role', '') NOT IN ('lead', 'co_lead', 'participant') THEN
+      RAISE EXCEPTION 'Investor role must be explicit before verification' USING ERRCODE = '22023';
+    END IF;
+  END IF;
+
+  IF p_kind = 'pattern' THEN
+    UPDATE public.patterns SET status = p_new_status, reviewed_by = v_actor,
+      reviewed_at = NOW() WHERE id = p_id;
+  ELSE
+    EXECUTE FORMAT('UPDATE public.%I SET %I = $1 WHERE id = $2', v_table, v_column)
+      USING p_new_status, p_id;
+  END IF;
+
+  INSERT INTO public.admin_review_events
+    (item_kind, item_id, reviewer_id, previous_status, new_status, reason, evidence_urls)
+  VALUES (p_kind, p_id, v_actor, v_old_status, p_new_status, TRIM(p_reason), v_urls)
+  RETURNING id INTO v_event_id;
+
+  RETURN v_event_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.admin_review_candidate(TEXT, UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.admin_review_candidate(TEXT, UUID, TEXT, TEXT, TEXT) TO authenticated;
 
 -- ============================================
 -- COLUMN-LEVEL PRIVILEGES FOR USER_PROFILES
@@ -872,3 +1004,1278 @@ COMMENT ON COLUMN public.user_profiles.trial_issued_at IS 'Timestamp when studen
 COMMENT ON COLUMN public.user_profiles.trial_eligibility_domain IS 'Email domain that qualified user for trial (e.g., mastersunion.org)';
 COMMENT ON FUNCTION public.activate_student_trial() IS 'Atomic trial activation: verifies eligibility, prevents reissue, sets entitlement and audit in one transaction';
 COMMENT ON FUNCTION public.has_full_access() IS 'Centralized expiry-aware access check: returns true only for active subscribed or non-expired student_trial';
+
+-- ============================================
+-- EVIDENCE FOUNDATION (Checkpoint 1)
+-- ============================================
+
+-- Model run kind enum
+CREATE TYPE public.model_run_kind AS ENUM (
+  'embedding',
+  'extraction',
+  'resolution',
+  'verification',
+  'clustering',
+  'other'
+);
+
+-- Model runs table
+CREATE TABLE public.model_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_kind public.model_run_kind NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'error', 'timeout')),
+  error_message TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_model_runs_kind ON public.model_runs(run_kind);
+CREATE INDEX idx_model_runs_provider_model ON public.model_runs(provider, model);
+CREATE INDEX idx_model_runs_created_at ON public.model_runs(created_at DESC);
+CREATE INDEX idx_model_runs_cost ON public.model_runs(cost_usd);
+
+-- Source documents table
+CREATE TABLE public.source_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id TEXT NOT NULL REFERENCES public.source_connectors(source_id),
+  url TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  r2_key TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_id, url)
+);
+
+CREATE INDEX idx_source_documents_source ON public.source_documents(source_id);
+CREATE INDEX idx_source_documents_hash ON public.source_documents(content_hash);
+CREATE INDEX idx_source_documents_fetched ON public.source_documents(fetched_at DESC);
+
+-- Document versions table
+CREATE TABLE public.document_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_document_id UUID NOT NULL REFERENCES public.source_documents(id) ON DELETE CASCADE,
+  version_number INTEGER NOT NULL DEFAULT 1,
+  content_hash TEXT NOT NULL,
+  content_text TEXT,
+  r2_key TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_document_id, version_number)
+);
+
+CREATE INDEX idx_document_versions_source_doc ON public.document_versions(source_document_id);
+CREATE INDEX idx_document_versions_hash ON public.document_versions(content_hash);
+
+-- Source archive table (raw content storage)
+CREATE TABLE public.source_archive (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id TEXT NOT NULL REFERENCES public.source_connectors(source_id),
+  source_document_id UUID REFERENCES public.source_documents(id) ON DELETE SET NULL,
+  document_version_id UUID REFERENCES public.document_versions(id) ON DELETE SET NULL,
+  content_hash TEXT NOT NULL,
+  r2_key TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_source_archive_source ON public.source_archive(source_id);
+CREATE INDEX idx_source_archive_doc ON public.source_archive(source_document_id);
+CREATE INDEX idx_source_archive_version ON public.source_archive(document_version_id);
+
+-- Claims table
+CREATE TABLE public.claims (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('funding_round', 'round_participant', 'company', 'fund', 'thesis', 'pattern')),
+  subject_id UUID NOT NULL,
+  claim_type TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  value_json JSONB NOT NULL,
+  extraction_confidence NUMERIC,
+  resolution_confidence NUMERIC,
+  publication_status TEXT NOT NULL DEFAULT 'candidate' CHECK (publication_status IN ('candidate', 'published', 'rejected', 'superseded')),
+  publication_reason TEXT,
+  superseded_by_claim_id UUID REFERENCES public.claims(id),
+  evidence_spans JSONB DEFAULT '[]',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_claims_subject ON public.claims(subject_type, subject_id);
+CREATE INDEX idx_claims_type ON public.claims(claim_type);
+CREATE INDEX idx_claims_publication ON public.claims(publication_status);
+CREATE INDEX idx_claims_extraction_conf ON public.claims(extraction_confidence);
+CREATE INDEX idx_claims_resolution_conf ON public.claims(resolution_confidence);
+CREATE INDEX idx_claims_superseded ON public.claims(superseded_by_claim_id);
+
+-- Resolution decisions table
+CREATE TABLE public.resolution_decisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  input_text TEXT NOT NULL,
+  normalized_input TEXT NOT NULL,
+  target_entity_type TEXT NOT NULL CHECK (target_entity_type IN ('company', 'fund', 'person')),
+  resolved_entity_id UUID,
+  method TEXT NOT NULL CHECK (method IN ('deterministic', 'llm', 'human', 'hybrid')),
+  confidence NUMERIC NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  evidence_claim_id UUID REFERENCES public.claims(id),
+  status TEXT NOT NULL DEFAULT 'accepted' CHECK (status IN ('accepted', 'rejected', 'pending')),
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (input_text, target_entity_type, resolved_entity_id)
+);
+
+CREATE INDEX idx_resolution_decisions_input ON public.resolution_decisions(normalized_input);
+CREATE INDEX idx_resolution_decisions_entity ON public.resolution_decisions(target_entity_type, resolved_entity_id);
+CREATE INDEX idx_resolution_decisions_claim ON public.resolution_decisions(evidence_claim_id);
+
+-- Claim bindings table
+CREATE TABLE public.claim_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  claim_id UUID NOT NULL REFERENCES public.claims(id) ON DELETE CASCADE,
+  record_type TEXT NOT NULL CHECK (record_type IN ('funding_round', 'round_participant', 'company', 'fund', 'thesis', 'pattern')),
+  record_id UUID NOT NULL,
+  field_name TEXT NOT NULL,
+  bound_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}',
+  UNIQUE (claim_id, record_type, record_id, field_name)
+);
+
+CREATE INDEX idx_claim_bindings_claim ON public.claim_bindings(claim_id);
+CREATE INDEX idx_claim_bindings_record ON public.claim_bindings(record_type, record_id);
+
+-- Publication status enum (if not exists)
+DO $$ BEGIN
+  CREATE TYPE public.publication_status AS ENUM (
+    'candidate',
+    'published',
+    'rejected',
+    'superseded'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Claim type enum (if not exists)
+DO $$ BEGIN
+  CREATE TYPE public.claim_type AS ENUM (
+    'investor_participation',
+    'funding_amount',
+    'valuation',
+    'round_stage',
+    'company_name',
+    'fund_name',
+    'thesis_theme',
+    'pattern_theme',
+    'other'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Triggers for updated_at on evidence tables
+CREATE TRIGGER update_claims_updated_at
+  BEFORE UPDATE ON public.claims
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+-- Grants for evidence tables
+GRANT ALL ON public.model_runs TO service_role;
+GRANT ALL ON public.source_documents TO service_role;
+GRANT ALL ON public.document_versions TO service_role;
+GRANT ALL ON public.source_archive TO service_role;
+GRANT ALL ON public.claims TO service_role;
+GRANT ALL ON public.resolution_decisions TO service_role;
+GRANT ALL ON public.claim_bindings TO service_role;
+
+-- RLS for evidence tables (service-role only)
+ALTER TABLE public.model_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.source_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.document_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.source_archive ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.claims ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.resolution_decisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.claim_bindings ENABLE ROW LEVEL SECURITY;
+
+-- No policies for authenticated/anon - evidence is service-role only
+-- Migration: Pipeline Orchestration (Checkpoint 2)
+-- Date: 2026-10-07
+-- Description: Durable pipeline orchestration with leases, retries, idempotency, and replay
+-- Depends on: 20261007020808 (Checkpoint 1 lint fixes)
+
+-- ============================================
+-- ENUMS
+-- ============================================
+
+CREATE TYPE public.pipeline_type AS ENUM (
+  'news_ingestion',
+  'funding_extraction',
+  'thesis_extraction',
+  'pattern_detection',
+  'full_refresh'
+);
+
+CREATE TYPE public.pipeline_trigger AS ENUM (
+  'scheduled',
+  'manual',
+  'webhook',
+  'retry'
+);
+
+CREATE TYPE public.pipeline_status AS ENUM (
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'partial',
+  'cancelled'
+);
+
+CREATE TYPE public.stage_name AS ENUM (
+  'discover',
+  'fetch',
+  'archive',
+  'normalize',
+  'extract',
+  'resolve',
+  'verify',
+  'publish'
+);
+
+CREATE TYPE public.stage_status AS ENUM (
+  'pending',
+  'leased',
+  'running',
+  'completed',
+  'retry_wait',
+  'failed',
+  'dead_letter',
+  'skipped'
+);
+
+CREATE TYPE public.retryability AS ENUM (
+  'retryable',
+  'non_retryable'
+);
+
+-- ============================================
+-- PIPELINE_RUNS TABLE
+-- ============================================
+
+CREATE TABLE public.pipeline_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pipeline_type public.pipeline_type NOT NULL,
+  trigger public.pipeline_trigger NOT NULL DEFAULT 'scheduled',
+  status public.pipeline_status NOT NULL DEFAULT 'pending',
+  parameters JSONB NOT NULL DEFAULT '{}',
+  idempotency_key TEXT NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  total_items BIGINT NOT NULL DEFAULT 0,
+  completed_items BIGINT NOT NULL DEFAULT 0,
+  failed_items BIGINT NOT NULL DEFAULT 0,
+  total_latency_ms BIGINT NOT NULL DEFAULT 0,
+  failure_summary JSONB,
+  crash_budget INTEGER NOT NULL DEFAULT 3,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (idempotency_key)
+);
+
+CREATE INDEX idx_pipeline_runs_type_status ON public.pipeline_runs(pipeline_type, status);
+CREATE INDEX idx_pipeline_runs_requested_at ON public.pipeline_runs(requested_at DESC);
+CREATE INDEX idx_pipeline_runs_heartbeat ON public.pipeline_runs(heartbeat_at) WHERE status = 'running';
+CREATE INDEX idx_pipeline_runs_stale ON public.pipeline_runs(id, heartbeat_at) WHERE status = 'running';
+
+-- ============================================
+-- STAGE_ATTEMPTS TABLE
+-- ============================================
+
+CREATE TABLE public.stage_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pipeline_run_id UUID NOT NULL REFERENCES public.pipeline_runs(id) ON DELETE CASCADE,
+  stage_name public.stage_name NOT NULL,
+  status public.stage_status NOT NULL DEFAULT 'pending',
+  attempt_number INTEGER NOT NULL DEFAULT 1,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  idempotency_key TEXT NOT NULL,
+  lease_owner TEXT,
+  lease_token TEXT,
+  leased_at TIMESTAMPTZ,
+  lease_expires_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ,
+  retry_after TIMESTAMPTZ,
+  input_ref JSONB NOT NULL DEFAULT '{}',
+  output_ref JSONB,
+  model_run_id UUID REFERENCES public.model_runs(id),
+  error_code TEXT,
+  error_message TEXT,
+  error_metadata JSONB,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  latency_ms BIGINT,
+  items_processed BIGINT NOT NULL DEFAULT 0,
+  items_succeeded BIGINT NOT NULL DEFAULT 0,
+  items_failed BIGINT NOT NULL DEFAULT 0,
+  cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+  crash_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (pipeline_run_id, stage_name, idempotency_key)
+);
+
+-- Indexes for lease acquisition and queue polling (no NOW() in predicates)
+CREATE INDEX idx_stage_attempts_run_stage ON public.stage_attempts(pipeline_run_id, stage_name);
+CREATE INDEX idx_stage_attempts_lease_acquire ON public.stage_attempts(status, retry_after, lease_expires_at, pipeline_run_id)
+  WHERE status IN ('pending', 'retry_wait', 'leased');
+CREATE INDEX idx_stage_attempts_expired_lease ON public.stage_attempts(id, lease_expires_at)
+  WHERE status = 'leased';
+CREATE INDEX idx_stage_attempts_retry_ready ON public.stage_attempts(id, retry_after)
+  WHERE status = 'retry_wait';
+CREATE INDEX idx_stage_attempts_dead_letter ON public.stage_attempts(pipeline_run_id, stage_name)
+  WHERE status = 'dead_letter';
+
+-- ============================================
+-- TRIGGER FOR UPDATED_AT
+-- ============================================
+
+CREATE TRIGGER update_pipeline_runs_updated_at
+  BEFORE UPDATE ON public.pipeline_runs
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_stage_attempts_updated_at
+  BEFORE UPDATE ON public.stage_attempts
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+-- ============================================
+-- SERVICE-ROLE ONLY ORCHESTRATION FUNCTIONS
+-- ============================================
+
+-- create_or_get_pipeline_run: Creates a new run or returns existing one by idempotency_key
+CREATE OR REPLACE FUNCTION public.create_or_get_pipeline_run(
+  p_pipeline_type public.pipeline_type,
+  p_trigger public.pipeline_trigger,
+  p_idempotency_key TEXT,
+  p_parameters JSONB DEFAULT '{}'
+)
+RETURNS TABLE (
+  run_id UUID,
+  is_new BOOLEAN
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_run_id UUID;
+  v_is_new BOOLEAN := FALSE;
+BEGIN
+  INSERT INTO public.pipeline_runs (pipeline_type, trigger, idempotency_key, parameters, status, requested_at)
+  VALUES (p_pipeline_type, p_trigger, p_idempotency_key, p_parameters, 'pending', NOW())
+  ON CONFLICT (idempotency_key) DO UPDATE SET
+    trigger = CASE WHEN EXCLUDED.trigger = 'retry' THEN 'retry' ELSE public.pipeline_runs.trigger END,
+    parameters = EXCLUDED.parameters,
+    updated_at = NOW()
+  RETURNING id, (xmax = 0) INTO v_run_id, v_is_new;
+
+  IF NOT v_is_new AND p_trigger = 'retry' THEN
+    UPDATE public.pipeline_runs
+    SET status = 'pending',
+        started_at = NULL,
+        heartbeat_at = NULL,
+        completed_at = NULL,
+        failure_summary = NULL,
+        updated_at = NOW()
+    WHERE id = v_run_id
+      AND status IN ('completed', 'failed', 'partial', 'cancelled');
+  END IF;
+
+  RETURN QUERY SELECT v_run_id, v_is_new;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_or_get_pipeline_run(public.pipeline_type, public.pipeline_trigger, TEXT, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.create_or_get_pipeline_run(public.pipeline_type, public.pipeline_trigger, TEXT, JSONB) TO service_role;
+
+-- enqueue_stage_attempt: Creates or gets a stage attempt with idempotency
+-- Atomic concurrency-safe idempotency: INSERT ... ON CONFLICT DO NOTHING followed by SELECT of the canonical row.
+-- Re-enqueue of same terminal key returns existing attempt UNCHANGED (no mutation of input_ref, model_run_id, max_attempts, counters, audit).
+-- Only replay_dead_letter creates new work from terminal state.
+CREATE OR REPLACE FUNCTION public.enqueue_stage_attempt(
+  p_pipeline_run_id UUID,
+  p_stage_name public.stage_name,
+  p_idempotency_key TEXT,
+  p_input_ref JSONB DEFAULT '{}',
+  p_max_attempts INTEGER DEFAULT 3,
+  p_model_run_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+  attempt_id UUID,
+  is_new BOOLEAN
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_attempt_id UUID;
+  v_is_new BOOLEAN := FALSE;
+  v_run_status public.pipeline_status;
+BEGIN
+  SELECT status INTO v_run_status
+  FROM public.pipeline_runs
+  WHERE id = p_pipeline_run_id
+  FOR SHARE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Pipeline run not found: %', p_pipeline_run_id USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_run_status IN ('completed', 'failed', 'partial', 'cancelled') THEN
+    RAISE EXCEPTION 'Cannot enqueue stage for terminal pipeline run: %', v_run_status USING ERRCODE = '55000';
+  END IF;
+
+  -- Atomic upsert: try to insert, on conflict do nothing and select existing
+  INSERT INTO public.stage_attempts (
+    pipeline_run_id, stage_name, idempotency_key, input_ref,
+    max_attempts, model_run_id, status
+  ) VALUES (
+    p_pipeline_run_id, p_stage_name, p_idempotency_key, p_input_ref,
+    p_max_attempts, p_model_run_id, 'pending'
+  )
+  ON CONFLICT (pipeline_run_id, stage_name, idempotency_key) DO NOTHING
+  RETURNING id, TRUE INTO v_attempt_id, v_is_new;
+
+  IF v_is_new THEN
+    RETURN QUERY SELECT v_attempt_id, TRUE;
+  ELSE
+    -- Conflict occurred, select the existing row unchanged
+    RETURN QUERY SELECT id, FALSE FROM public.stage_attempts
+    WHERE pipeline_run_id = p_pipeline_run_id
+      AND stage_name = p_stage_name
+      AND idempotency_key = p_idempotency_key;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.enqueue_stage_attempt(UUID, public.stage_name, TEXT, JSONB, INTEGER, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enqueue_stage_attempt(UUID, public.stage_name, TEXT, JSONB, INTEGER, UUID) TO service_role;
+
+-- acquire_stage_lease: Claims a pending/retry_wait/expired attempt for processing
+-- Returns zero rows (not a null row) when no work available.
+-- Requires p_pipeline_run_id to scope to a specific run; omit for global queue polling.
+-- Crash budget is a run-wide gate: each expired-lease recovery atomically decrements it.
+-- When exhausted, the recovered attempt is dead-lettered without returning a lease.
+CREATE OR REPLACE FUNCTION public.acquire_stage_lease(
+  p_worker_id TEXT,
+  p_lease_seconds INTEGER DEFAULT 300,
+  p_allowed_stage_names public.stage_name[] DEFAULT NULL,
+  p_pipeline_run_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+  attempt_id UUID,
+  pipeline_run_id UUID,
+  stage_name public.stage_name,
+  idempotency_key TEXT,
+  attempt_number INTEGER,
+  input_ref JSONB,
+  max_attempts INTEGER,
+  model_run_id UUID,
+  lease_token TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_lease_token TEXT := replace(gen_random_uuid()::TEXT, '-', '') || replace(gen_random_uuid()::TEXT, '-', '');
+  v_now TIMESTAMPTZ := NOW();
+  v_lease_expires_at TIMESTAMPTZ := v_now + (p_lease_seconds || ' seconds')::INTERVAL;
+  v_attempt RECORD;
+  v_new_crash_count INTEGER;
+  v_crash_budget INTEGER;
+BEGIN
+  SELECT sa.id, sa.pipeline_run_id, sa.stage_name, sa.idempotency_key,
+         sa.attempt_number, sa.input_ref, sa.max_attempts, sa.model_run_id,
+         sa.status, sa.lease_expires_at, sa.crash_count, sa.started_at
+  INTO v_attempt
+  FROM public.stage_attempts sa
+  JOIN public.pipeline_runs pr ON pr.id = sa.pipeline_run_id
+  WHERE sa.status IN ('pending', 'retry_wait', 'leased')
+    AND (sa.retry_after IS NULL OR sa.retry_after <= v_now)
+    AND (sa.status <> 'leased' OR sa.lease_expires_at <= v_now)
+    AND pr.status IN ('pending', 'running')
+    AND (p_allowed_stage_names IS NULL OR sa.stage_name = ANY(p_allowed_stage_names))
+    AND (p_pipeline_run_id IS NULL OR sa.pipeline_run_id = p_pipeline_run_id)
+    AND sa.attempt_number <= sa.max_attempts
+  ORDER BY
+    CASE sa.status WHEN 'pending' THEN 0 WHEN 'retry_wait' THEN 1 WHEN 'leased' THEN 2 END,
+    sa.created_at
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  -- Compute new crash_count if this is an expired lease recovery
+  v_new_crash_count := v_attempt.crash_count;
+  IF v_attempt.status = 'leased' AND v_attempt.lease_expires_at <= v_now THEN
+    v_new_crash_count := v_attempt.crash_count + 1;
+  END IF;
+
+  -- Atomically check and decrement crash_budget for expired lease recoveries
+  IF v_attempt.status = 'leased' AND v_attempt.lease_expires_at <= v_now THEN
+    UPDATE public.pipeline_runs
+    SET crash_budget = GREATEST(0, crash_budget - 1),
+        updated_at = v_now
+    WHERE id = v_attempt.pipeline_run_id
+      AND crash_budget > 0
+    RETURNING crash_budget INTO v_crash_budget;
+
+    -- If crash_budget exhausted (was 0 or decremented to 0), dead-letter without lease
+    IF v_crash_budget IS NULL OR v_crash_budget <= 0 THEN
+      UPDATE public.stage_attempts
+      SET status = 'dead_letter',
+          error_code = 'RUN_CRASH_BUDGET_EXHAUSTED',
+          error_message = 'Pipeline run crash budget exhausted on lease recovery',
+          error_metadata = jsonb_build_object('crash_count', v_new_crash_count, 'crash_budget', 0),
+          completed_at = v_now,
+          lease_owner = NULL,
+          lease_token = NULL,
+          leased_at = NULL,
+          lease_expires_at = NULL,
+          heartbeat_at = NULL,
+          crash_count = v_new_crash_count,
+          updated_at = v_now
+      WHERE id = v_attempt.id;
+      RETURN;
+    END IF;
+  END IF;
+
+  -- Also enforce per-attempt crash threshold (3)
+  -- Dead-letter without consuming run crash_budget (already consumed for expiry recovery above)
+  IF v_new_crash_count >= 3 THEN
+    UPDATE public.stage_attempts
+    SET status = 'dead_letter',
+        error_code = 'CRASH_BUDGET_EXCEEDED',
+        error_message = 'Lease expired too many times (crash budget exceeded)',
+        error_metadata = jsonb_build_object('crash_count', v_new_crash_count, 'threshold', 3),
+        completed_at = v_now,
+        lease_owner = NULL,
+        lease_token = NULL,
+        leased_at = NULL,
+        lease_expires_at = NULL,
+        heartbeat_at = NULL,
+        crash_count = v_new_crash_count,
+        updated_at = v_now
+    WHERE id = v_attempt.id;
+
+    RETURN;
+  END IF;
+
+  UPDATE public.stage_attempts
+  SET status = 'leased',
+      lease_owner = p_worker_id,
+      lease_token = v_lease_token,
+      leased_at = v_now,
+      lease_expires_at = v_lease_expires_at,
+      heartbeat_at = v_now,
+      started_at = COALESCE(v_attempt.started_at, v_now),
+      crash_count = v_new_crash_count,
+      updated_at = v_now
+  WHERE id = v_attempt.id;
+
+  UPDATE public.pipeline_runs
+  SET status = 'running',
+      started_at = COALESCE(started_at, v_now),
+      heartbeat_at = v_now,
+      updated_at = v_now
+  WHERE id = v_attempt.pipeline_run_id
+    AND status = 'pending';
+
+  RETURN QUERY SELECT
+    v_attempt.id,
+    v_attempt.pipeline_run_id,
+    v_attempt.stage_name,
+    v_attempt.idempotency_key,
+    v_attempt.attempt_number,
+    v_attempt.input_ref,
+    v_attempt.max_attempts,
+    v_attempt.model_run_id,
+    v_lease_token;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.acquire_stage_lease(TEXT, INTEGER, public.stage_name[], UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.acquire_stage_lease(TEXT, INTEGER, public.stage_name[], UUID) TO service_role;
+
+-- heartbeat_stage_lease: Extends lease TTL for long-running work
+-- Returns FALSE if lease expired or token invalid; does not emit error.
+CREATE OR REPLACE FUNCTION public.heartbeat_stage_lease(
+  p_attempt_id UUID,
+  p_lease_token TEXT,
+  p_lease_seconds INTEGER DEFAULT 300
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_now TIMESTAMPTZ := NOW();
+  v_lease_expires_at TIMESTAMPTZ := v_now + (p_lease_seconds || ' seconds')::INTERVAL;
+  v_updated INTEGER;
+BEGIN
+  UPDATE public.stage_attempts
+  SET heartbeat_at = v_now,
+      lease_expires_at = v_lease_expires_at,
+      updated_at = v_now
+  WHERE id = p_attempt_id
+    AND lease_token = p_lease_token
+    AND status = 'leased'
+    AND lease_expires_at > v_now;
+
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+
+  IF v_updated > 0 THEN
+    UPDATE public.pipeline_runs
+    SET heartbeat_at = v_now,
+        updated_at = v_now
+    WHERE id IN (SELECT pipeline_run_id FROM public.stage_attempts WHERE id = p_attempt_id)
+      AND status = 'running';
+    RETURN TRUE;
+  END IF;
+
+  RETURN FALSE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.heartbeat_stage_lease(UUID, TEXT, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.heartbeat_stage_lease(UUID, TEXT, INTEGER) TO service_role;
+
+-- complete_stage_attempt: Marks attempt as completed with output and counters
+-- Uses explicit TIMESTAMPTZ variable for started_at; computes latency_ms with numeric cast.
+CREATE OR REPLACE FUNCTION public.complete_stage_attempt(
+  p_attempt_id UUID,
+  p_lease_token TEXT,
+  p_output_ref JSONB,
+  p_items_processed BIGINT DEFAULT 0,
+  p_items_succeeded BIGINT DEFAULT 0,
+  p_items_failed BIGINT DEFAULT 0,
+  p_cost_usd NUMERIC DEFAULT 0
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_now TIMESTAMPTZ := NOW();
+  v_started_at TIMESTAMPTZ;
+  v_latency_ms BIGINT;
+  v_pipeline_run_id UUID;
+  v_updated INTEGER;
+BEGIN
+  SELECT pipeline_run_id, started_at INTO v_pipeline_run_id, v_started_at
+  FROM public.stage_attempts
+  WHERE id = p_attempt_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Attempt not found: %', p_attempt_id USING ERRCODE = 'P0001';
+  END IF;
+
+  v_latency_ms := EXTRACT(EPOCH FROM (v_now - v_started_at)) * 1000;
+
+  UPDATE public.stage_attempts
+  SET status = 'completed',
+      output_ref = p_output_ref,
+      items_processed = p_items_processed,
+      items_succeeded = p_items_succeeded,
+      items_failed = p_items_failed,
+      cost_usd = p_cost_usd,
+      completed_at = v_now,
+      latency_ms = v_latency_ms,
+      lease_owner = NULL,
+      lease_token = NULL,
+      lease_expires_at = NULL,
+      heartbeat_at = NULL,
+      updated_at = v_now
+  WHERE id = p_attempt_id
+    AND lease_token = p_lease_token
+    AND status = 'leased';
+
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+
+  IF v_updated = 0 THEN
+    RETURN FALSE;
+  END IF;
+
+  UPDATE public.pipeline_runs
+  SET total_items = total_items + p_items_processed,
+      completed_items = completed_items + p_items_succeeded,
+      failed_items = failed_items + p_items_failed,
+      total_latency_ms = total_latency_ms + v_latency_ms,
+      heartbeat_at = v_now,
+      updated_at = v_now
+  WHERE id = v_pipeline_run_id;
+
+  RETURN TRUE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.complete_stage_attempt(UUID, TEXT, JSONB, BIGINT, BIGINT, BIGINT, NUMERIC) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.complete_stage_attempt(UUID, TEXT, JSONB, BIGINT, BIGINT, BIGINT, NUMERIC) TO service_role;
+
+-- fail_stage_attempt: Marks attempt as failed with error info and schedules retry or dead_letter
+-- Retry increments attempt_number ON FAILURE SCHEDULING (not on reacquisition).
+-- Bounded exponential backoff: ~1, 5, 15 minutes. After max_attempts -> dead_letter.
+CREATE OR REPLACE FUNCTION public.fail_stage_attempt(
+  p_attempt_id UUID,
+  p_lease_token TEXT,
+  p_error_code TEXT,
+  p_error_message TEXT,
+  p_retryability public.retryability DEFAULT 'retryable',
+  p_error_metadata JSONB DEFAULT '{}'
+)
+RETURNS TABLE (
+  attempt_id UUID,
+  next_status public.stage_status,
+  retry_after TIMESTAMPTZ
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_now TIMESTAMPTZ := NOW();
+  v_attempt RECORD;
+  v_next_status public.stage_status;
+  v_retry_after TIMESTAMPTZ;
+  v_backoff_minutes INTEGER;
+BEGIN
+  SELECT pipeline_run_id, attempt_number, max_attempts, started_at
+  INTO v_attempt
+  FROM public.stage_attempts
+  WHERE id = p_attempt_id
+    AND lease_token = p_lease_token
+    AND status = 'leased'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Attempt not found or invalid lease: %', p_attempt_id USING ERRCODE = 'P0001';
+  END IF;
+
+  IF p_retryability = 'non_retryable' OR v_attempt.attempt_number >= v_attempt.max_attempts THEN
+    v_next_status := 'dead_letter';
+    v_retry_after := NULL;
+  ELSE
+    v_next_status := 'retry_wait';
+    v_backoff_minutes := CASE v_attempt.attempt_number
+      WHEN 1 THEN 1
+      WHEN 2 THEN 5
+      ELSE 15
+    END;
+    v_retry_after := v_now + (v_backoff_minutes || ' minutes')::INTERVAL;
+  END IF;
+
+  UPDATE public.stage_attempts
+  SET status = v_next_status,
+      error_code = p_error_code,
+      error_message = p_error_message,
+      error_metadata = p_error_metadata,
+      retry_after = v_retry_after,
+      completed_at = CASE WHEN v_next_status = 'dead_letter' THEN v_now ELSE NULL END,
+      latency_ms = EXTRACT(EPOCH FROM (v_now - v_attempt.started_at)) * 1000,
+      lease_owner = NULL,
+      lease_token = NULL,
+      lease_expires_at = NULL,
+      heartbeat_at = NULL,
+      attempt_number = v_attempt.attempt_number + 1,
+      updated_at = v_now
+  WHERE id = p_attempt_id;
+
+  IF v_next_status = 'dead_letter' THEN
+    UPDATE public.pipeline_runs
+    SET failed_items = failed_items + 1,
+        updated_at = v_now
+    WHERE id = v_attempt.pipeline_run_id;
+  END IF;
+
+  RETURN QUERY SELECT p_attempt_id, v_next_status, v_retry_after;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.fail_stage_attempt(UUID, TEXT, TEXT, TEXT, public.retryability, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.fail_stage_attempt(UUID, TEXT, TEXT, TEXT, public.retryability, JSONB) TO service_role;
+
+-- replay_dead_letter: Creates a new auditable attempt from a dead-lettered item
+-- New attempt has attempt_number = 1 (bounded), fresh leaseable status, replayed_from metadata.
+-- Original dead letter preserved with replayed_to link.
+-- If parent run is terminal (completed/failed/partial/cancelled), reopen it to 'running':
+-- status running, completed_at NULL, failure_summary NULL, heartbeat refreshed, original dead letter retained.
+CREATE OR REPLACE FUNCTION public.replay_dead_letter(
+  p_attempt_id UUID,
+  p_reason TEXT
+)
+RETURNS TABLE (
+  new_attempt_id UUID,
+  old_attempt_id UUID
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_old_attempt RECORD;
+  v_new_attempt_id UUID;
+BEGIN
+  SELECT sa.pipeline_run_id, sa.stage_name, sa.idempotency_key, sa.input_ref, sa.max_attempts, sa.model_run_id,
+         pr.status
+  INTO v_old_attempt
+  FROM public.stage_attempts sa
+  JOIN public.pipeline_runs pr ON pr.id = sa.pipeline_run_id
+  WHERE sa.id = p_attempt_id
+    AND sa.status = 'dead_letter'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Dead letter attempt not found: %', p_attempt_id USING ERRCODE = 'P0001';
+  END IF;
+
+  -- If parent run is terminal, reopen it to running
+  IF v_old_attempt.status IN ('completed', 'failed', 'partial', 'cancelled') THEN
+    UPDATE public.pipeline_runs
+    SET status = 'running',
+        started_at = COALESCE(started_at, NOW()),
+        heartbeat_at = NOW(),
+        completed_at = NULL,
+        failure_summary = NULL,
+        updated_at = NOW()
+    WHERE id = v_old_attempt.pipeline_run_id;
+  END IF;
+
+  INSERT INTO public.stage_attempts (
+    pipeline_run_id, stage_name, idempotency_key, input_ref,
+    max_attempts, model_run_id, attempt_number, status,
+    error_metadata
+  ) VALUES (
+    v_old_attempt.pipeline_run_id,
+    v_old_attempt.stage_name,
+    v_old_attempt.idempotency_key || ':replay:' || gen_random_uuid()::TEXT,
+    v_old_attempt.input_ref,
+    v_old_attempt.max_attempts,
+    v_old_attempt.model_run_id,
+    1,
+    'pending',
+    jsonb_build_object('replayed_from', p_attempt_id, 'reason', p_reason, 'replayed_at', NOW())
+  )
+  RETURNING id INTO v_new_attempt_id;
+
+  UPDATE public.stage_attempts
+  SET error_metadata = error_metadata || jsonb_build_object('replayed_to', v_new_attempt_id, 'replay_reason', p_reason),
+      updated_at = NOW()
+  WHERE id = p_attempt_id;
+
+  RETURN QUERY SELECT v_new_attempt_id, p_attempt_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.replay_dead_letter(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.replay_dead_letter(UUID, TEXT) TO service_role;
+
+-- finalize_pipeline_run: Marks pipeline run as completed/partial/failed based on stage outcomes
+CREATE OR REPLACE FUNCTION public.finalize_pipeline_run(
+  p_run_id UUID,
+  p_status public.pipeline_status DEFAULT 'completed',
+  p_failure_summary JSONB DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_pending_stages INTEGER;
+  v_failed_stages INTEGER;
+BEGIN
+  PERFORM 1
+  FROM public.pipeline_runs
+  WHERE id = p_run_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Pipeline run not found: %', p_run_id USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT COUNT(*) FILTER (WHERE status NOT IN ('completed', 'skipped', 'dead_letter')) INTO v_pending_stages
+  FROM public.stage_attempts
+  WHERE pipeline_run_id = p_run_id;
+
+  SELECT COUNT(*) FILTER (WHERE status = 'dead_letter') INTO v_failed_stages
+  FROM public.stage_attempts
+  WHERE pipeline_run_id = p_run_id;
+
+  IF p_status = 'completed' THEN
+    IF v_failed_stages > 0 AND v_pending_stages = 0 THEN
+      p_status := 'partial';
+    ELSIF v_failed_stages > 0 OR v_pending_stages > 0 THEN
+      p_status := 'failed';
+    END IF;
+  END IF;
+
+  UPDATE public.pipeline_runs
+  SET status = p_status,
+      completed_at = NOW(),
+      failure_summary = COALESCE(p_failure_summary,
+        CASE WHEN v_failed_stages > 0 THEN jsonb_build_object(
+          'failed_stages', v_failed_stages,
+          'message', 'Some stages ended in dead_letter'
+        ) ELSE NULL END),
+      updated_at = NOW()
+  WHERE id = p_run_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.finalize_pipeline_run(UUID, public.pipeline_status, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.finalize_pipeline_run(UUID, public.pipeline_status, JSONB) TO service_role;
+
+-- ============================================
+-- DIAGNOSTIC READ FUNCTIONS (service-role only)
+-- ============================================
+
+-- Get recent pipeline runs with statuses
+CREATE OR REPLACE FUNCTION public.get_recent_pipeline_runs(
+  p_limit INTEGER DEFAULT 50,
+  p_pipeline_type public.pipeline_type DEFAULT NULL
+)
+RETURNS TABLE (
+  id UUID,
+  pipeline_type public.pipeline_type,
+  trigger public.pipeline_trigger,
+  status public.pipeline_status,
+  requested_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  total_items BIGINT,
+  completed_items BIGINT,
+  failed_items BIGINT,
+  total_latency_ms BIGINT,
+  failure_summary JSONB
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT pr.id, pr.pipeline_type, pr.trigger, pr.status,
+         pr.requested_at, pr.started_at, pr.completed_at,
+         pr.total_items, pr.completed_items, pr.failed_items,
+         pr.total_latency_ms, pr.failure_summary
+  FROM public.pipeline_runs pr
+  WHERE p_pipeline_type IS NULL OR pr.pipeline_type = p_pipeline_type
+  ORDER BY pr.requested_at DESC
+  LIMIT p_limit;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_recent_pipeline_runs(INTEGER, public.pipeline_type) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_recent_pipeline_runs(INTEGER, public.pipeline_type) TO service_role;
+
+-- Get stage waterfall for a pipeline run
+CREATE OR REPLACE FUNCTION public.get_pipeline_run_stages(p_run_id UUID)
+RETURNS TABLE (
+  id UUID,
+  stage_name public.stage_name,
+  status public.stage_status,
+  attempt_number INTEGER,
+  max_attempts INTEGER,
+  idempotency_key TEXT,
+  lease_owner TEXT,
+  leased_at TIMESTAMPTZ,
+  lease_expires_at TIMESTAMPTZ,
+  retry_after TIMESTAMPTZ,
+  input_ref JSONB,
+  output_ref JSONB,
+  model_run_id UUID,
+  error_code TEXT,
+  error_message TEXT,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  latency_ms BIGINT,
+  items_processed BIGINT,
+  items_succeeded BIGINT,
+  items_failed BIGINT,
+  cost_usd NUMERIC
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT sa.id, sa.stage_name, sa.status, sa.attempt_number, sa.max_attempts,
+         sa.idempotency_key, sa.lease_owner, sa.leased_at, sa.lease_expires_at,
+         sa.retry_after, sa.input_ref, sa.output_ref, sa.model_run_id,
+         sa.error_code, sa.error_message, sa.started_at, sa.completed_at,
+         sa.latency_ms, sa.items_processed, sa.items_succeeded, sa.items_failed,
+         sa.cost_usd
+  FROM public.stage_attempts sa
+  WHERE sa.pipeline_run_id = p_run_id
+  ORDER BY
+    CASE sa.stage_name
+      WHEN 'discover' THEN 1
+      WHEN 'fetch' THEN 2
+      WHEN 'archive' THEN 3
+      WHEN 'normalize' THEN 4
+      WHEN 'extract' THEN 5
+      WHEN 'resolve' THEN 6
+      WHEN 'verify' THEN 7
+      WHEN 'publish' THEN 8
+      ELSE 99
+    END,
+    sa.attempt_number;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_pipeline_run_stages(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_pipeline_run_stages(UUID) TO service_role;
+
+-- Get pending/retry/dead-letter counts by pipeline type
+CREATE OR REPLACE FUNCTION public.get_pipeline_queue_counts()
+RETURNS TABLE (
+  pipeline_type public.pipeline_type,
+  pending_count BIGINT,
+  running_count BIGINT,
+  retry_wait_count BIGINT,
+  dead_letter_count BIGINT,
+  expired_lease_count BIGINT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT pr.pipeline_type,
+         COUNT(*) FILTER (WHERE sa.status = 'pending') AS pending_count,
+         COUNT(*) FILTER (WHERE sa.status = 'running' OR (sa.status = 'leased' AND sa.lease_expires_at > NOW())) AS running_count,
+         COUNT(*) FILTER (WHERE sa.status = 'retry_wait') AS retry_wait_count,
+         COUNT(*) FILTER (WHERE sa.status = 'dead_letter') AS dead_letter_count,
+         COUNT(*) FILTER (WHERE sa.status = 'leased' AND sa.lease_expires_at <= NOW()) AS expired_lease_count
+  FROM public.pipeline_runs pr
+  JOIN public.stage_attempts sa ON sa.pipeline_run_id = pr.id
+  WHERE pr.status IN ('pending', 'running')
+  GROUP BY pr.pipeline_type;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_pipeline_queue_counts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_pipeline_queue_counts() TO service_role;
+
+-- Get stale leases (for monitoring/alerting)
+CREATE OR REPLACE FUNCTION public.get_stale_leases(p_threshold_minutes INTEGER DEFAULT 10)
+RETURNS TABLE (
+  attempt_id UUID,
+  pipeline_run_id UUID,
+  stage_name public.stage_name,
+  lease_owner TEXT,
+  leased_at TIMESTAMPTZ,
+  lease_expires_at TIMESTAMPTZ,
+  minutes_stale INTEGER
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT sa.id, sa.pipeline_run_id, sa.stage_name, sa.lease_owner,
+         sa.leased_at, sa.lease_expires_at,
+         FLOOR(EXTRACT(EPOCH FROM (NOW() - sa.lease_expires_at)) / 60)::INTEGER AS minutes_stale
+  FROM public.stage_attempts sa
+  WHERE sa.status = 'leased'
+    AND sa.lease_expires_at <= NOW()
+    AND sa.lease_expires_at <= NOW() - (p_threshold_minutes || ' minutes')::INTERVAL
+  ORDER BY sa.lease_expires_at;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_stale_leases(INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_stale_leases(INTEGER) TO service_role;
+
+-- Get source health: aggregates 24h logs independently from latest log row
+CREATE OR REPLACE FUNCTION public.get_source_health(p_limit INTEGER DEFAULT 100)
+RETURNS TABLE (
+  source_id TEXT,
+  name TEXT,
+  status TEXT,
+  last_fetch_at TIMESTAMPTZ,
+  last_fetch_status TEXT,
+  consecutive_failures BIGINT,
+  items_fetched_24h BIGINT,
+  items_new_24h BIGINT,
+  unique_yield_24h NUMERIC,
+  health_score NUMERIC
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    sc.source_id,
+    sc.name,
+    sc.status,
+    latest_log.fetched_at AS last_fetch_at,
+    latest_log.status AS last_fetch_status,
+    COALESCE((
+      SELECT COUNT(*)
+      FROM public.source_fetch_logs sfl2
+      WHERE sfl2.source_id = sc.source_id
+        AND sfl2.status = 'error'
+        AND sfl2.fetched_at > (
+          SELECT COALESCE(MAX(sfl3.fetched_at), '1970-01-01'::TIMESTAMPTZ)
+          FROM public.source_fetch_logs sfl3
+          WHERE sfl3.source_id = sc.source_id AND sfl3.status = 'success'
+        )
+    ), 0) AS consecutive_failures,
+    COALESCE(SUM(sfl.items_found) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours'), 0) AS items_fetched_24h,
+    COALESCE(SUM(sfl.items_new) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours'), 0) AS items_new_24h,
+    CASE WHEN SUM(sfl.items_found) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours') > 0
+      THEN SUM(sfl.items_new) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours')::NUMERIC /
+           SUM(sfl.items_found) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours')
+      ELSE 0 END AS unique_yield_24h,
+    CASE
+      WHEN sc.status = 'approved' THEN
+        LEAST(100, 50 + COALESCE(SUM(sfl.items_new) FILTER (WHERE sfl.fetched_at > NOW() - INTERVAL '24 hours'), 0) * 2)::NUMERIC
+      ELSE 0::NUMERIC
+    END AS health_score
+  FROM public.source_connectors sc
+  LEFT JOIN LATERAL (
+    SELECT latest_sfl.fetched_at, latest_sfl.status
+    FROM public.source_fetch_logs latest_sfl
+    WHERE latest_sfl.source_id = sc.source_id
+    ORDER BY latest_sfl.fetched_at DESC
+    LIMIT 1
+  ) latest_log ON TRUE
+  LEFT JOIN public.source_fetch_logs sfl ON sfl.source_id = sc.source_id
+  GROUP BY sc.source_id, sc.name, sc.status, latest_log.fetched_at, latest_log.status
+  ORDER BY health_score DESC
+  LIMIT p_limit;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_source_health(INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_source_health(INTEGER) TO service_role;
+
+-- Get model run metrics
+CREATE OR REPLACE FUNCTION public.get_model_run_metrics(
+  p_since TIMESTAMPTZ DEFAULT NOW() - INTERVAL '24 hours',
+  p_run_kind public.model_run_kind DEFAULT NULL
+)
+RETURNS TABLE (
+  run_kind public.model_run_kind,
+  provider TEXT,
+  model TEXT,
+  runs_count BIGINT,
+  total_tokens_input BIGINT,
+  total_tokens_output BIGINT,
+  total_latency_ms BIGINT,
+  total_cost_usd NUMERIC,
+  avg_latency_ms NUMERIC,
+  success_rate NUMERIC
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT mr.run_kind, mr.provider, mr.model,
+         COUNT(*) AS runs_count,
+         SUM(mr.tokens_input) AS total_tokens_input,
+         SUM(mr.tokens_output) AS total_tokens_output,
+         SUM(mr.latency_ms) AS total_latency_ms,
+         SUM(mr.cost_usd) AS total_cost_usd,
+         AVG(mr.latency_ms)::NUMERIC AS avg_latency_ms,
+         COUNT(*) FILTER (WHERE mr.status = 'success')::NUMERIC / COUNT(*) AS success_rate
+  FROM public.model_runs mr
+  WHERE mr.started_at >= p_since
+    AND (p_run_kind IS NULL OR mr.run_kind = p_run_kind)
+  GROUP BY mr.run_kind, mr.provider, mr.model
+  ORDER BY total_cost_usd DESC;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_model_run_metrics(TIMESTAMPTZ, public.model_run_kind) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_model_run_metrics(TIMESTAMPTZ, public.model_run_kind) TO service_role;
+
+-- Get publication stats
+CREATE OR REPLACE FUNCTION public.get_publication_stats(
+  p_since TIMESTAMPTZ DEFAULT NOW() - INTERVAL '24 hours'
+)
+RETURNS TABLE (
+  publication_status public.publication_status,
+  claim_type public.claim_type,
+  count BIGINT,
+  avg_extraction_confidence NUMERIC,
+  avg_resolution_confidence NUMERIC,
+  top_rejection_reasons JSONB
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT c.publication_status, c.claim_type,
+         COUNT(*) AS count,
+         AVG(c.extraction_confidence) AS avg_extraction_confidence,
+         AVG(c.resolution_confidence) AS avg_resolution_confidence,
+         jsonb_agg(DISTINCT c.publication_reason) FILTER (WHERE c.publication_reason IS NOT NULL) AS top_rejection_reasons
+  FROM public.claims c
+  WHERE c.created_at >= p_since
+  GROUP BY c.publication_status, c.claim_type
+  ORDER BY c.publication_status, c.claim_type;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_publication_stats(TIMESTAMPTZ) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_publication_stats(TIMESTAMPTZ) TO service_role;
+
+-- ============================================
+-- RLS POLICIES (service-role only; no authenticated grants)
+-- ============================================
+
+ALTER TABLE public.pipeline_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stage_attempts ENABLE ROW LEVEL SECURITY;
+
+GRANT ALL ON public.pipeline_runs TO service_role;
+GRANT ALL ON public.stage_attempts TO service_role;
+
+-- No policies for authenticated/anon - orchestration is service-role only
+
+-- ============================================
+-- COMMENTS
+-- ============================================
+
+COMMENT ON TABLE public.pipeline_runs IS 'Durable pipeline execution records with idempotent scheduling';
+COMMENT ON TABLE public.stage_attempts IS 'Individual stage attempts within a pipeline run with lease-based concurrency control';
+
+COMMENT ON COLUMN public.pipeline_runs.idempotency_key IS 'Deterministic key for idempotent scheduling: pipeline_type:trigger:scope:content_hash:schema_version';
+COMMENT ON COLUMN public.stage_attempts.idempotency_key IS 'Deterministic key for idempotent stage execution: pipeline_type:stage:source/input:content_hash:schema_version';
+COMMENT ON COLUMN public.stage_attempts.lease_token IS 'Unguessable token proving lease ownership (not just worker name)';
+COMMENT ON COLUMN public.stage_attempts.error_metadata IS 'Structured error metadata. NEVER store secrets, raw provider responses, or prohibited source text.';
+COMMENT ON FUNCTION public.acquire_stage_lease IS 'Claims work using SELECT FOR UPDATE SKIP LOCKED with unguessable lease token. Default 5-min TTL. Scope to pipeline_run_id when processing a specific run.';
+COMMENT ON FUNCTION public.fail_stage_attempt IS 'Handles retry with bounded exponential backoff (1, 5, 15 min). Increments attempt_number on failure scheduling. After max attempts -> dead_letter.';
+COMMENT ON FUNCTION public.replay_dead_letter IS 'Creates auditable new attempt with attempt_number=1, preserving history. Does not delete original dead letter.';
