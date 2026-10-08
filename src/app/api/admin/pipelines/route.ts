@@ -21,7 +21,7 @@ function validateAction(action: string): string {
 
 function validatePipelineType(type?: string): string | undefined {
   if (!type) return undefined;
-  const validTypes = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'full_refresh'];
+  const validTypes = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'entity_sync', 'full_refresh'];
   if (!validTypes.includes(type)) throw new Error('Invalid pipeline type');
   return type;
 }

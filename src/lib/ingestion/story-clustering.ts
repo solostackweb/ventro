@@ -203,6 +203,10 @@ function calculateContentSimilarity(content1: string, content2: string): number 
   return union.size > 0 ? intersection.size / union.size : 0;
 }
 
+function yieldToHeartbeat(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
 export async function clusterStories(newStories: FetchResult[], entities: EntityCatalog = { companies: [], funds: [] }): Promise<ClusteredStory[]> {
   const supabase = ingestionSupabase;
   const clusters: ClusteredStory[] = [];
@@ -220,7 +224,11 @@ export async function clusterStories(newStories: FetchResult[], entities: Entity
     existingMap.set(story.canonical_url, story as ClusteredStory);
   }
 
-  for (const newStory of newStories) {
+  for (let newStoryIndex = 0; newStoryIndex < newStories.length; newStoryIndex++) {
+    const newStory = newStories[newStoryIndex];
+    // Clustering is CPU-heavy. Yield regularly so the lease heartbeat can renew
+    // while a large hosted backlog is being normalized.
+    if (newStoryIndex > 0 && newStoryIndex % 10 === 0) await yieldToHeartbeat();
     let matchedStory: ClusteredStory | null = null;
     let bestSimilarity = 0;
 
@@ -239,6 +247,10 @@ export async function clusterStories(newStories: FetchResult[], entities: Entity
     // Check against existing stories
     for (const existing of existingMap.values()) {
       const titleSim = calculateTitleSimilarity(newStory.metadata.title || '', existing.headline || '');
+      // The final score is 60% title + 40% content and must exceed 0.9.
+      // Even perfect content cannot qualify when title similarity is <= 5/6,
+      // so avoid building large trigram sets for impossible candidates.
+      if (titleSim <= 5 / 6) continue;
       const contentSim = calculateContentSimilarity(newStory.raw_content || '', existing.summary || '');
 
       const combinedSim = (titleSim * 0.6) + (contentSim * 0.4);
@@ -257,6 +269,7 @@ export async function clusterStories(newStories: FetchResult[], entities: Entity
     // Check against other new stories in this batch
     for (const cluster of clusters) {
       const titleSim = calculateTitleSimilarity(newStory.metadata.title || '', cluster.headline || '');
+      if (titleSim <= 5 / 6) continue;
       const contentSim = calculateContentSimilarity(newStory.raw_content || '', cluster.summary || '');
 
       const combinedSim = (titleSim * 0.6) + (contentSim * 0.4);

@@ -14,6 +14,7 @@ on:
           - funding_extraction
           - thesis_extraction
           - pattern_detection
+          - entity_sync
           - full_refresh
         default: news_ingestion
       source_scope:
@@ -73,10 +74,12 @@ jobs:
           if [ -n "$SOURCE_SCOPE" ]; then ARGS+=(--scope="$SOURCE_SCOPE"); fi
           npm run pipeline:worker -- "${ARGS[@]}"
 
-      - name: Run daily thesis and pattern intelligence
+      - name: Run daily entity, thesis, and pattern intelligence
         if: github.event_name == 'schedule'
         run: |
           if [ "$(date -u +'%H')" = "02" ]; then
+            npm run pipeline:worker -- --once --type=entity_sync --max-stages=1
+            npm run pipeline:worker -- --once --type=funding_extraction --max-stages=4
             npm run pipeline:worker -- --once --type=thesis_extraction --max-stages=2
             npm run pipeline:worker -- --once --type=pattern_detection --max-stages=1
           fi

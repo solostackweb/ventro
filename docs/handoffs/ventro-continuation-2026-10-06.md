@@ -2241,3 +2241,119 @@ Required rollout order (no recrawl is needed):
 7. Refresh News, Investments, VC profiles, Theses, Patterns, and Today. Do not run two workflows of the same pipeline type concurrently. The eight-stage `news_ingestion` graph already includes funding extraction; use a separate `funding_extraction` run with `max_stages=4` only as an idempotent recovery run if the news replay succeeds but Investments remains empty.
 
 Status: `DONE_WITH_EXTERNAL_ROLLOUT_REQUIRED`. The code and migration are ready and verified. The live app will remain in its current sparse state until the hosted migration is pushed, the code is deployed, and the archive-replay workflow sequence completes.
+
+## Continuation Update — GitHub worker timeout repair (2026-10-09)
+
+The user reported that a manually dispatched News ingestion workflow was cancelled at the one-hour GitHub Actions limit. The supplied log showed the database pipeline itself returning `partial` after about 66 seconds, followed by GitHub waiting until the job timeout. A fresh read-only hosted check also found a newer normalization run stranded after processing 300 items.
+
+Root causes:
+
+- `scripts/pipeline-worker.mjs` only handled rejection. On success it returned from `main()` without terminating the CLI process, so open SDK/network handles could keep the GitHub step alive after the pipeline had already completed.
+- Story clustering calculated content-trigram similarity for every new-story × existing-story pair before determining whether the titles could possibly meet the final 0.9 score. On the growing hosted corpus this became a synchronous CPU hotspot that blocked the lease heartbeat and left normalization leased until cancellation.
+
+Implemented:
+
+- Direct CLI execution now exits `0` after the fully awaited pipeline completes and still exits `1` on failure.
+- Clustering now applies a mathematically safe title gate: because the final score is `0.6 * title + 0.4 * content`, candidates with title similarity at or below `5/6` cannot exceed `0.9`, even with perfect content, and skip expensive trigram generation.
+- The clustering loop yields to the event loop every ten incoming stories so the heartbeat can renew during large backlog processing.
+- Added regression coverage proving direct CLI success termination and proving that impossible-title matches never inspect expensive article content.
+
+Hosted state observed after migration `20261008060000` was applied:
+
+- All local and remote migrations through `20261008060000` are synchronized.
+- `source_archive=2346`, `archive_processed=300`, `archive_pending=2046`, `stories=393`, `story_sources=393`, and `official_source_count=30`.
+- The screenshot's missing `story_sources.document_version_id` error belongs to an older run from before the migration. The current hosted schema contains the column and normalization has already produced 393 durable source links.
+- The separate `model_run_budget_snapshots` missing-table warning does not fail the pipeline or cause the timeout; it remains schema/observability debt for a later migration.
+
+Verification:
+
+- Focused worker and clustering suites: 2 suites, 32 tests passed.
+- Full Jest run: 44 suites and 385 tests passed; 1 Docker-only suite and 22 tests skipped.
+- `npm run typecheck`: passed.
+- Focused ESLint: 0 errors and 0 warnings.
+- `npm run build`: passed after clearing only the generated `.next` cache and allowing the configured Google-font downloads.
+
+Next rollout:
+
+1. Commit and push the timeout repair so GitHub Actions runs the new worker and Vercel receives the same code revision.
+2. Manually dispatch `news_ingestion` with blank scope and `max_stages=8`. It will continue from the 2,046 unprocessed archive rows; it does not need to redownload the 2,346 archived documents.
+3. After News completes, run `thesis_extraction` with `max_stages=2`, then `pattern_detection` with `max_stages=1`.
+4. Run `npx tsx --env-file=.env.local scripts/diagnose-hosted-pipeline.ts` and confirm `archive_pending=0`, the latest News run is completed, and downstream records begin populating.
+
+Status: `DONE_WITH_EXTERNAL_ROLLOUT_REQUIRED`. The timeout root causes are repaired and verified locally; GitHub must run the pushed revision before the hosted workflow behavior changes.
+
+## Continuation Update — Investment, VC, and YC data-path diagnosis (2026-10-09)
+
+The user confirmed that the News page now displays roughly 600 stories but Investments, VC portfolios, YC company data, Theses, Patterns, and the Today answers remain empty or skeletal. A fresh read-only hosted diagnostic showed that normalization is progressing (`source_archive=2346`, `archive_processed=1500`, `archive_pending=846`, `stories=1552`, `story_sources=1551`) while all derived investment records remain empty (`claims=0`, `funding_rounds=0`, `round_participants=0`, `fund_portfolio=0`).
+
+Confirmed immediate blockage:
+
+- The active News pipeline is still the old hosted run whose normalize attempt was stranded in `leased`; it has not reached extract, resolve, verify, or publish. The growing News count comes from partial normalization work committed before cancellation.
+- There are currently 95 funding-classified stories. All 95 have immutable document versions, but only 16 match a company in the small seeded company catalog and none has an investor classified as an explicit `lead` or `participant`. Consequently 16 could create bare funding rounds, while zero can currently produce a row in the inner-joined `investment_graph` view.
+- A prior standalone funding extraction completed before the archive replay had produced usable normalized funding stories, so it processed no records.
+
+Confirmed structural gaps:
+
+- The VC Engine is backed by 50 seeded `funds` profile shells. There is no dedicated fund portfolio crawler/materializer. The News funding extractor writes `funding_rounds` and `round_participants`; it does not populate `fund_portfolio`, so every VC card continues to show zero portfolio companies.
+- The YC Engine is backed by 12 seeded batch headers and only 8 seeded `yc_batch_companies` relationships. The `yc-directory` connector is `pending_review`, and the generic HTML fetcher would archive only the directory page even if approved. No YC directory parser/materializer exists to create companies and batch memberships.
+- Generic entity matching only compares story headlines against the seeded company catalog and headline/summary text against the seeded fund catalog. It cannot discover new companies or investors, which sharply limits funding conversion.
+- Therefore the current architecture has a working News ingestion path, but it does not yet implement the promised end-to-end VC or YC data engines. Those require dedicated source adapters and materialization stages, not merely rerunning the News workflow.
+
+Diagnostic improvement:
+
+- `scripts/diagnose-hosted-pipeline.ts` now reports story-company links, story-investor links, fund portfolio rows, legacy investment rows, YC batch/company rows, story facets, and funding conversion readiness.
+
+Status: `ROOT_CAUSE_CONFIRMED`. A newly deployed News run must first finish normalization and funding extraction, but that alone cannot fill the VC and YC engines. The next implementation needs dedicated YC directory synchronization, VC portfolio/profile synchronization, stronger funding entity discovery/resolution, and a graph contract that can display evidenced rounds even when investor participation is not yet resolved.
+
+## Continuation Update — Structured VC, YC, and funding engines (2026-10-09)
+
+The user approved the full implementation option rather than another partial News-only recovery. The missing structured-data paths are now implemented in code.
+
+Implemented:
+
+- Added migration `20261009010000_entity_sync_and_round_visibility.sql`.
+  - Adds the durable `entity_sync` pipeline type.
+  - Expands YC batch seasons to Winter, Spring, Summer, and Fall (`W`, `P`, `S`, `F`).
+  - Adds source URL, verification, and freshness provenance to `fund_portfolio` and a public read policy for verified/partial portfolio rows.
+  - Replaces the inner-joined `investment_graph` with a left-joined contract so evidence-backed funding rounds remain visible when no investor was publicly disclosed or resolved.
+- Added `src/lib/ingestion/entity-sync.ts`.
+  - Reads the public configuration from YC's official company directory at runtime and pages through the official Algolia-backed directory; no search credential is hardcoded.
+  - Conservatively identifies AI companies, normalizes all four current batch seasons, upserts company profiles and batch relationships, and derives real batch totals.
+  - Scrapes each seeded fund's official portfolio page through Firecrawl v2 with bounded concurrency, validates extracted companies against page content, and materializes verified `fund_portfolio` relationships with provenance.
+- Added the one-stage `entity_sync` graph to pipeline types, the worker parser, registry, admin validation, and stage handlers.
+- Scheduled daily hosted execution at 02:00 UTC before funding, thesis, and pattern materialization. This keeps production independent of the local machine.
+- Improved deterministic funding extraction:
+  - Discovers funded company names from explicit headline forms such as “X raises $Y” and official VC “Partnering with X” posts.
+  - Creates and links previously unknown companies conservatively.
+  - Searches immutable full document text for explicit known-investor roles (`led by`, `participation from`, etc.), while rejecting ordinary mentions.
+- Updated Investments UI/types so a visible round can render “Investor undisclosed” without generating a broken investor link.
+- Added parser, classification, evidence-grounding, migration, registry, and worker regression tests.
+
+Verification:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 197 existing warnings.
+- Full Jest run: 46 suites passed, 400 tests passed; the Docker-only database suite and 22 tests were skipped.
+- `npm run build`: passed; all 34 application pages generated. A first sandboxed attempt could not download configured Google Fonts; the permitted network retry passed.
+- `npx supabase db push --dry-run`: passed and shows exactly one pending migration, `20261009010000_entity_sync_and_round_visibility.sql`.
+- `git diff --check`: passed (line-ending notices only).
+
+Required live rollout order:
+
+1. Apply the migration: `npx supabase db push`.
+2. Commit/push and wait for the GitHub Actions/Vercel deployment containing the new `entity_sync` worker.
+3. Confirm the GitHub Actions repository secret `FIRECRAWL_API_KEY` exists.
+4. Manually dispatch `Scheduled Ingestion Pipeline` with `pipeline_type=entity_sync`, `source_scope=yc`, and `max_stages=1`; wait for it to finish.
+5. Dispatch `entity_sync` again with `source_scope=vc` and `max_stages=1`; wait for it to finish. Splitting the scopes makes any Firecrawl/source failure independent from the YC import.
+6. Dispatch `funding_extraction` with blank scope and `max_stages=4`.
+7. Dispatch `thesis_extraction` with `max_stages=2`, then `pattern_detection` with `max_stages=1`.
+8. Validate that YC batch counts and companies, VC portfolio counts, funding rounds, and investor participations are non-zero. Some funding rounds may correctly show “Investor undisclosed” when the underlying source does not identify a participating fund.
+
+Operational notes:
+
+- The daily scheduled workflow now repeats entity synchronization automatically before downstream intelligence jobs.
+- VC sync processes at most 100 seeded funds by default with concurrency 3; set `ENTITY_SYNC_MAX_FUNDS` only if a smaller operational cap is needed.
+- Individual VC-page failures are counted and logged without discarding successful YC or other VC imports.
+- The gstack investigation preamble could not run because Git Bash failed on Windows with `NtCreateDirectoryObject ... 0xC0000022`; investigation proceeded in the skill's documented degraded mode, so no gstack session telemetry was recorded.
+
+Status: `IMPLEMENTED_AND_VERIFIED_LOCALLY — EXTERNAL_ROLLOUT_REQUIRED`. The live screens will remain unchanged until the migration is applied, this revision is deployed, and the `entity_sync` plus downstream workflows run.

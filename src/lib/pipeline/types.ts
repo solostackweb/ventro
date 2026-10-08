@@ -9,6 +9,7 @@ export type PipelineType =
   | 'funding_extraction'
   | 'thesis_extraction'
   | 'pattern_detection'
+  | 'entity_sync'
   | 'full_refresh';
 
 export type PipelineTrigger = 'scheduled' | 'manual' | 'webhook' | 'retry';

@@ -155,7 +155,11 @@ CREATE TABLE public.fund_portfolio (
   first_investment_date TIMESTAMPTZ,
   latest_investment_date TIMESTAMPTZ,
   total_invested_usd BIGINT,
+  source_url TEXT,
+  verification_status TEXT NOT NULL DEFAULT 'partial' CHECK (verification_status IN ('verified', 'partial', 'unverified', 'conflicted')),
+  last_verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(fund_id, company_id)
 );
 
@@ -569,6 +573,7 @@ CREATE POLICY "Anyone can view published comments" ON public.discussion_comments
 -- Public read access for entities (companies, funds, stories)
 ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.funds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fund_portfolio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stated_thesis ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.observed_thesis ENABLE ROW LEVEL SECURITY;
@@ -582,6 +587,9 @@ CREATE POLICY "Public can view company profiles" ON public.companies
 -- Public can view fund basic info
 CREATE POLICY "Public can view fund profiles" ON public.funds
   FOR SELECT USING (true);
+
+CREATE POLICY "Public can view fund portfolio" ON public.fund_portfolio
+  FOR SELECT USING (verification_status IN ('verified', 'partial'));
 
 -- Public can view stories
 CREATE POLICY "Public can view stories" ON public.stories
@@ -693,6 +701,7 @@ CREATE TRIGGER update_workspace_settings_updated_at BEFORE UPDATE ON public.work
 CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON public.companies FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_funds_updated_at BEFORE UPDATE ON public.funds FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_fund_vehicles_updated_at BEFORE UPDATE ON public.fund_vehicles FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_fund_portfolio_updated_at BEFORE UPDATE ON public.fund_portfolio FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_investments_updated_at BEFORE UPDATE ON public.investments FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_stories_updated_at BEFORE UPDATE ON public.stories FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 CREATE TRIGGER update_source_connectors_updated_at BEFORE UPDATE ON public.source_connectors FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -1228,6 +1237,7 @@ CREATE TYPE public.pipeline_type AS ENUM (
   'funding_extraction',
   'thesis_extraction',
   'pattern_detection',
+  'entity_sync',
   'full_refresh'
 );
 

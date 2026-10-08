@@ -13,8 +13,10 @@ export async function main(argv = process.argv, dependencies = {}) {
 
 import { pathToFileURL } from 'url';
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  main().catch((error) => {
-    console.error('Pipeline worker failed:', error);
-    process.exit(1);
-  });
+  main()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('Pipeline worker failed:', error);
+      process.exit(1);
+    });
 }

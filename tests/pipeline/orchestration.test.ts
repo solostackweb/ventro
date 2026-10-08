@@ -18,8 +18,8 @@ import {
 describe('Pipeline Types', () => {
   describe('Enums', () => {
     it('has correct pipeline types', () => {
-      const types: PipelineType[] = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'full_refresh'];
-      expect(types).toHaveLength(5);
+      const types: PipelineType[] = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'entity_sync', 'full_refresh'];
+      expect(types).toHaveLength(6);
     });
 
     it('has correct pipeline triggers', () => {

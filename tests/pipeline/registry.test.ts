@@ -8,6 +8,7 @@ jest.mock('@/lib/ingestion/story-clustering', () => ({ runStoryClustering: jest.
 jest.mock('@/lib/ingestion/funding-extractor', () => ({ extractFundingEvidence: jest.fn() }));
 jest.mock('@/lib/ingestion/pattern-detector', () => ({ detectPatterns: jest.fn() }));
 jest.mock('@/lib/ingestion/thesis-extractor', () => ({ extractStatedThesisForAllFunds: jest.fn(), computeObservedThesisForAllFunds: jest.fn() }));
+jest.mock('@/lib/ingestion/entity-sync', () => ({ syncTrackedEntities: jest.fn() }));
 jest.mock('@/lib/intelligence/evidence/with-repository', () => ({ evidenceCore: {} }));
 jest.mock('@/lib/supabase/ingestion', () => ({ ingestionSupabase: { from: jest.fn(), rpc: jest.fn() } }));
 
@@ -71,8 +72,13 @@ describe('Pipeline Registry', () => {
       expect(graph[0].stageName).toBe('extract');
     });
 
+    it('entity_sync graph has one bounded stage', () => {
+      const graph = getPipelineGraph('entity_sync');
+      expect(graph).toEqual([{ stageName: 'extract', dependsOn: [] }]);
+    });
+
     it('first stage of each graph has zero dependencies', () => {
-      const types: PipelineType[] = ['news_ingestion', 'full_refresh', 'funding_extraction', 'thesis_extraction', 'pattern_detection'];
+      const types: PipelineType[] = ['news_ingestion', 'full_refresh', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'entity_sync'];
       for (const type of types) {
         const graph = getPipelineGraph(type);
         expect(graph[0].dependsOn).toHaveLength(0);
@@ -80,7 +86,7 @@ describe('Pipeline Registry', () => {
     });
 
     it('dependencies reference valid stages in same pipeline', () => {
-      const types: PipelineType[] = ['news_ingestion', 'full_refresh', 'funding_extraction', 'thesis_extraction', 'pattern_detection'];
+      const types: PipelineType[] = ['news_ingestion', 'full_refresh', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'entity_sync'];
       for (const type of types) {
         const graph = getPipelineGraph(type);
         const stageNames = new Set(graph.map(s => s.stageName));

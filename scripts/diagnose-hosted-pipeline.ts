@@ -21,9 +21,15 @@ async function main() {
     document_versions: await count('document_versions'),
     stories: await count('stories'),
     story_sources: await count('story_sources'),
+    story_companies: await count('story_companies'),
+    story_investors: await count('story_investors'),
     claims: await count('claims'),
     funding_rounds: await count('funding_rounds'),
     round_participants: await count('round_participants'),
+    fund_portfolio: await count('fund_portfolio'),
+    legacy_investments: await count('investments'),
+    yc_batches: await count('yc_batches'),
+    yc_batch_companies: await count('yc_batch_companies'),
     thesis_records: await count('thesis_records'),
     patterns: await count('patterns'),
     answer_snapshots: await count('answer_snapshots'),
@@ -59,6 +65,52 @@ async function main() {
   const { count: officialSourceCount, error: trustError } = await db.from('source_connectors')
     .select('*', { count: 'exact', head: true }).eq('is_official', true);
 
+  const { data: storyFacets, error: storyFacetsError } = await db.from('stories')
+    .select('event_type,verification_label,ai_topics').limit(5000);
+  const facetCounts = (storyFacets ?? []).reduce((summary, story) => {
+    const eventType = story.event_type ?? 'null';
+    const verification = story.verification_label ?? 'null';
+    summary.event_types[eventType] = (summary.event_types[eventType] ?? 0) + 1;
+    summary.verification[verification] = (summary.verification[verification] ?? 0) + 1;
+    if ((story.ai_topics ?? []).length > 0) summary.with_ai_topics += 1;
+    return summary;
+  }, { event_types: {} as Record<string, number>, verification: {} as Record<string, number>, with_ai_topics: 0 });
+
+  const { data: fundingStories, error: fundingStoriesError } = await db.from('stories')
+    .select(`
+      id,
+      headline,
+      verification_label,
+      story_sources(document_version_id),
+      story_companies(company_id),
+      story_investors(fund_id,role)
+    `)
+    .eq('event_type', 'funding')
+    .limit(1000);
+  const fundingReadiness = (fundingStories ?? []).reduce((summary, story) => {
+    const hasDocumentVersion = (story.story_sources ?? []).some(source => Boolean(source.document_version_id));
+    const hasCompany = (story.story_companies ?? []).length > 0;
+    const explicitInvestors = (story.story_investors ?? []).filter(investor =>
+      investor.role === 'lead' || investor.role === 'participant'
+    ).length;
+    if (hasDocumentVersion) summary.with_document_version += 1;
+    if (hasCompany) summary.with_company += 1;
+    if (explicitInvestors > 0) summary.with_explicit_investor += 1;
+    if (hasDocumentVersion && hasCompany) summary.round_extractable += 1;
+    if (hasDocumentVersion && hasCompany && explicitInvestors > 0) summary.graph_visible += 1;
+    summary.explicit_investor_links += explicitInvestors;
+    return summary;
+  }, {
+    total: 0,
+    with_document_version: 0,
+    with_company: 0,
+    with_explicit_investor: 0,
+    round_extractable: 0,
+    graph_visible: 0,
+    explicit_investor_links: 0,
+  });
+  fundingReadiness.total = fundingStories?.length ?? 0;
+
   console.log(JSON.stringify({
     counts,
     runs_error: runsError?.message ?? null,
@@ -68,6 +120,17 @@ async function main() {
     pending_error: pendingError?.message ?? null,
     thesis_relation_error: thesisRelationError?.message ?? null,
     official_source_count: trustError ? { error: trustError.message } : officialSourceCount,
+    story_facets_error: storyFacetsError?.message ?? null,
+    story_facets: facetCounts,
+    funding_readiness_error: fundingStoriesError?.message ?? null,
+    funding_readiness: fundingReadiness,
+    funding_story_samples: (fundingStories ?? []).slice(0, 10).map(story => ({
+      headline: story.headline,
+      verification_label: story.verification_label,
+      document_versions: (story.story_sources ?? []).filter(source => Boolean(source.document_version_id)).length,
+      companies: (story.story_companies ?? []).length,
+      investors: (story.story_investors ?? []).map(investor => investor.role),
+    })),
     pending_samples: (pendingSamples ?? []).map(item => ({
       ...item,
       raw_content_length: typeof item.raw_content === 'string' ? item.raw_content.length : null,

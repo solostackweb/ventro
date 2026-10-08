@@ -5,6 +5,8 @@
 
 import { generateIdempotencyKey, parseArgs, validateArgs, printHelp } from '@/lib/pipeline/worker-parser';
 import { runPipelineWorker } from '@/lib/pipeline/worker-main';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 describe('Worker CLI Parser', () => {
   describe('parseArgs', () => {
@@ -81,6 +83,10 @@ describe('Worker CLI Parser', () => {
       expect(() => validateArgs({ type: 'invalid', scope: '', maxStages: 10, runOnce: false, resumeRunId: null, help: false })).toThrow('Invalid pipeline type');
     });
 
+    it('accepts the structured entity synchronization pipeline', () => {
+      expect(parseArgs(['node', 'script', '--type=entity_sync']).type).toBe('entity_sync');
+    });
+
     it('rejects invalid UUID format', () => {
       expect(() => validateArgs({ type: 'news_ingestion', scope: '', maxStages: 10, runOnce: false, resumeRunId: 'invalid', help: false })).toThrow('valid UUID');
     });
@@ -149,6 +155,12 @@ describe('Worker CLI Parser', () => {
       await runPipelineWorker(['node', 'worker', `--resume=${resumeRunId}`, '--once'], { orchestrator });
       expect(orchestrator.runPipelineBounded).toHaveBeenCalledTimes(1);
       expect(orchestrator.runPipelineBounded).toHaveBeenCalledWith('news_ingestion', 'scheduled', { source_scope: 'all' }, 10, expect.any(String), resumeRunId);
+    });
+
+    it('terminates the direct CLI process after a successful bounded run', () => {
+      const cli = readFileSync(resolve(__dirname, '../../scripts/pipeline-worker.mjs'), 'utf8');
+      expect(cli).toMatch(/main\(\)[\s\S]*\.then\(\(\) => process\.exit\(0\)\)/);
+      expect(cli).toMatch(/\.catch\(\(error\)[\s\S]*process\.exit\(1\)/);
     });
   });
 });

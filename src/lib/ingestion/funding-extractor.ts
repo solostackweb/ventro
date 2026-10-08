@@ -37,6 +37,27 @@ const STAGE_MAP: Record<string, string> = {
 
 const IMPLEMENTATION_VERSION = 'funding-extractor@1.0.0';
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function inferFundedCompanyName(headline: string): string | null {
+  const title = headline.trim().replace(/\s*[|–—-]\s*[^|–—]+$/, '').trim();
+  const partnering = title.match(/^Partnering with\s+([^:]{2,100})(?::|$)/i);
+  if (partnering) return partnering[1].trim();
+  const raise = title.match(/^(.{2,100}?)\s+(?:raises?|raised|secures?|secured|closes?|closed|lands?|landed)\s+(?:an?\s+)?(?:\$|USD|€|£|\d)/i);
+  if (!raise) return null;
+  const name = raise[1].replace(/^(AI startup|Startup|Company)\s+/i, '').trim();
+  return /^(it|we|they|the company)$/i.test(name) ? null : name;
+}
+
+export function classifyKnownInvestorRole(text: string, fundName: string): 'lead' | 'participant' | null {
+  const escaped = escapeRegExp(fundName);
+  if (new RegExp(`(?:led|co-led)\\s+by[^.!?]{0,180}\\b${escaped}\\b|\\b${escaped}\\b[^.!?]{0,100}(?:led|co-led)\\s+(?:the\\s+)?(?:round|financing)`, 'i').test(text)) return 'lead';
+  if (new RegExp(`(?:participation\\s+from|joined\\s+by|backed\\s+by|investors?\\s+(?:include|included))[^.!?]{0,220}\\b${escaped}\\b`, 'i').test(text)) return 'participant';
+  return null;
+}
+
 function normalizeStage(stage: string): string {
   const normalized = stage.toLowerCase().trim();
   return STAGE_MAP[normalized] || 'other';
@@ -214,6 +235,8 @@ export async function extractFundingEvidence(): Promise<void> {
       event_date,
       publisher,
       source_urls,
+      ai_topics,
+      geography,
       verification_label,
       story_sources (source_url, publisher, published_at, document_version_id),
       story_companies (company_id, companies!inner (canonical_name)),
@@ -268,8 +291,29 @@ export async function extractFundingEvidence(): Promise<void> {
 
     // Match companies
     const companyNames = (story.story_companies || []).map((sc: { companies?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(sc.companies)).filter(Boolean);
-    const companyName = companyNames[0] || 'Unknown';
-    const companyId = knownCompanies.get(companyName.toLowerCase()) || null;
+    const inferredCompanyName = inferFundedCompanyName(story.headline);
+    const companyName = companyNames[0] || inferredCompanyName || 'Unknown';
+    let companyId = knownCompanies.get(companyName.toLowerCase()) || null;
+    if (!companyId && inferredCompanyName) {
+      const { data: insertedCompany, error: companyError } = await supabase.from('companies').insert({
+        canonical_name: inferredCompanyName,
+        short_description: story.summary,
+        ai_tags: story.ai_topics ?? [],
+        hq_country: story.geography ?? 'global',
+        source_links: allUrls,
+        verification_status: story.verification_label === 'verified' ? 'verified' : 'partial',
+        last_verified_at: new Date().toISOString(),
+      }).select('id').single();
+      if (!companyError && insertedCompany) {
+        const insertedCompanyId = insertedCompany.id as string;
+        companyId = insertedCompanyId;
+        knownCompanies.set(inferredCompanyName.toLowerCase(), insertedCompanyId);
+        await supabase.from('story_companies').upsert({ story_id: story.id, company_id: insertedCompanyId, role: 'primary' }, { onConflict: 'story_id,company_id' });
+      } else if (companyError?.code === '23505') {
+        const { data: existing } = await supabase.from('companies').select('id').ilike('canonical_name', inferredCompanyName).limit(1).maybeSingle();
+        companyId = existing?.id ?? null;
+      }
+    }
 
     // A name mention is not evidence of participation in this particular round.
     const storyInvestors = story.story_investors || [];
@@ -277,6 +321,14 @@ export async function extractFundingEvidence(): Promise<void> {
       .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
     const participantInvestors = storyInvestors.filter((si: { role: string }) => si.role === 'participant')
       .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
+
+    const fullText = docVersions.map(dv => dv.normalized_text).join('\n');
+    for (const fund of funds ?? []) {
+      if (leadInvestors.includes(fund.canonical_name) || participantInvestors.includes(fund.canonical_name)) continue;
+      const role = classifyKnownInvestorRole(fullText, fund.canonical_name);
+      if (role === 'lead') leadInvestors.push(fund.canonical_name);
+      if (role === 'participant') participantInvestors.push(fund.canonical_name);
+    }
 
     const parsedAmounts = docVersions
       .map(dv => parseAmount(dv.normalized_text))

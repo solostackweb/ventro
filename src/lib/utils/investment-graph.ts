@@ -11,21 +11,21 @@ interface InvestmentGraphRow {
   amount_usd: number | null;
   amount_currency: string | null;
   round_verification: string;
-  fund_id: string;
-  fund_name: string;
+  fund_id: string | null;
+  fund_name: string | null;
   firm_type: string | null;
   fund_vehicle_id: string | null;
   vehicle_name: string | null;
   vintage_year: number | null;
   participant_role: string | null;
-  participant_verification: string;
+  participant_verification: string | null;
   participant_sources: string[] | null;
   round_sources: string[] | null;
 }
 
 export function mapInvestmentGraphRow(row: InvestmentGraphRow) {
   return {
-    id: `${row.round_id}:${row.fund_id}:${row.fund_vehicle_id ?? 'firm'}`,
+    id: `${row.round_id}:${row.fund_id ?? 'undisclosed'}:${row.fund_vehicle_id ?? 'firm'}`,
     round_id: row.round_id,
     fund_id: row.fund_id,
     fund_vehicle_id: row.fund_vehicle_id,
@@ -37,7 +37,7 @@ export function mapInvestmentGraphRow(row: InvestmentGraphRow) {
     amount_currency: row.amount_currency ?? 'USD',
     investor_role: row.participant_role ?? 'undisclosed',
     source_urls: [...new Set([...(row.round_sources ?? []), ...(row.participant_sources ?? [])].filter(Boolean))],
-    verification_status: row.round_verification === 'verified' && row.participant_verification === 'verified'
+    verification_status: row.round_verification === 'verified' && (!row.fund_id || row.participant_verification === 'verified')
       ? 'verified' : 'partial',
     conflicts: [],
     companies: {
@@ -50,14 +50,14 @@ export function mapInvestmentGraphRow(row: InvestmentGraphRow) {
       stage: null,
       yc_batch: row.yc_batch,
     },
-    funds: {
+    funds: row.fund_id ? {
       id: row.fund_id,
-      canonical_name: row.fund_name,
+      canonical_name: row.fund_name ?? 'Unknown Fund',
       canonical_domain: null,
       firm_type: row.firm_type,
       hq_city: null,
       hq_country: null,
-    },
+    } : null,
     fund_vehicles: row.fund_vehicle_id ? {
       id: row.fund_vehicle_id,
       name: row.vehicle_name ?? 'Unnamed vehicle',

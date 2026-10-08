@@ -433,9 +433,13 @@ export default function InvestmentsPage() {
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Link href={`/investors/${inv.fund_id}`} className="px-3 py-1.5 rounded-lg bg-accent-blue/10 text-accent-blue text-sm hover:bg-accent-blue/20 transition-colors">
-                            {inv.funds?.canonical_name || 'Unknown Fund'}
-                          </Link>
+                          {inv.fund_id ? (
+                            <Link href={`/investors/${inv.fund_id}`} className="px-3 py-1.5 rounded-lg bg-accent-blue/10 text-accent-blue text-sm hover:bg-accent-blue/20 transition-colors">
+                              {inv.funds?.canonical_name || 'Unknown Fund'}
+                            </Link>
+                          ) : (
+                            <span className="px-3 py-1.5 rounded-lg bg-bg-tertiary text-text-muted text-sm">Investor undisclosed</span>
+                          )}
                           {inv.fund_vehicles && (
                             <span className="px-2 py-1 rounded bg-bg-tertiary text-xs text-text-muted">
                               {inv.fund_vehicles.name}

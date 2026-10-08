@@ -14,6 +14,7 @@ import { runStoryClustering } from '@/lib/ingestion/story-clustering';
 import { extractFundingEvidence } from '@/lib/ingestion/funding-extractor';
 import { detectPatterns } from '@/lib/ingestion/pattern-detector';
 import { extractStatedThesisForAllFunds, computeObservedThesisForAllFunds } from '@/lib/ingestion/thesis-extractor';
+import { syncTrackedEntities } from '@/lib/ingestion/entity-sync';
 import { materializeStatedThesisRecords, materializeObservedThesisRecords } from '@/lib/intelligence/answers/thesis-materializer';
 import { evidenceCore } from '@/lib/intelligence/evidence/with-repository';
 import crypto from 'crypto';
@@ -249,6 +250,28 @@ registerStage({ pipelineType: 'funding_extraction', stageName: 'publish', defini
 // ============================================
 
 registerStage({ pipelineType: 'funding_extraction', stageName: 'extract', definition: STAGE_DEFINITIONS.extract, handler: extractNewsHandler });
+
+// ============================================
+// STRUCTURED YC + VC ENTITY SYNCHRONIZATION
+// ============================================
+
+const entitySyncHandler = async (ctx: StageHandlerContext): Promise<StageResult> => {
+  assertLeaseActive(ctx);
+  const scope = String(ctx.inputRef.source_scope ?? 'all');
+  ctx.logger.info('Synchronizing YC directory and tracked VC portfolios', { scope });
+  const result = await syncTrackedEntities(scope);
+  assertLeaseActive(ctx);
+  const succeeded = result.ycCompanies + result.portfolioCompanies;
+  return {
+    outputRef: { ...result },
+    itemsProcessed: succeeded + result.fundsFailed,
+    itemsSucceeded: succeeded,
+    itemsFailed: result.fundsFailed,
+    costUsd: 0,
+  };
+};
+
+registerStage({ pipelineType: 'entity_sync', stageName: 'extract', definition: STAGE_DEFINITIONS.extract, handler: entitySyncHandler });
 
 // ============================================
 // THESIS EXTRACTION PIPELINE

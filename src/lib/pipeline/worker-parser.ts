@@ -73,7 +73,7 @@ export function parseArgs(argv: string[]): WorkerArgs {
 }
 
 export function validateArgs(args: WorkerArgs): void {
-  const validTypes = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'full_refresh'];
+  const validTypes = ['news_ingestion', 'funding_extraction', 'thesis_extraction', 'pattern_detection', 'entity_sync', 'full_refresh'];
   if (!validTypes.includes(args.type)) {
     throw new Error(`Invalid pipeline type: ${args.type}. Valid: ${validTypes.join(', ')}`);
   }
@@ -91,7 +91,7 @@ Usage:
   node scripts/pipeline-worker.mjs [options]
 
 Options:
-  --type, -t <type>         Pipeline type (news_ingestion, funding_extraction, thesis_extraction, pattern_detection, full_refresh)
+  --type, -t <type>         Pipeline type (news_ingestion, funding_extraction, thesis_extraction, pattern_detection, entity_sync, full_refresh)
   --scope, -s <scope>       Source scope filter (optional)
   --max-stages, -m <n>      Max stages to process (default: 10)
   --once                    Process up to max-stages and exit (bounded mode)

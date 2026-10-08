@@ -232,7 +232,7 @@ export interface ObservedTheme {
 export interface Investment {
   id: string;
   round_id?: string;
-  fund_id: string;
+  fund_id: string | null;
   fund_vehicle_id: string | null;
   company_id: string;
   company_name: string;

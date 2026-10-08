@@ -24,6 +24,7 @@ export const PIPELINE_GRAPHS: Record<PipelineType, { stageName: StageName; depen
     { stageName: 'extract', dependsOn: [] }, { stageName: 'verify', dependsOn: ['extract'] },
   ],
   pattern_detection: [{ stageName: 'extract', dependsOn: [] }],
+  entity_sync: [{ stageName: 'extract', dependsOn: [] }],
 };
 
 for (const [pipelineType, graph] of Object.entries(PIPELINE_GRAPHS)) {

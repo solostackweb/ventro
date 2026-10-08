@@ -109,6 +109,21 @@ describe('story clustering data safety', () => {
     expect(clusters[0].source_count).toBe(1);
   });
 
+  it('does not inspect expensive article text when headlines cannot meet the deduplication threshold', async () => {
+    const existing = {
+      canonical_url: 'https://a.example/story', headline: 'Completely unrelated market update',
+      get summary() { throw new Error('content similarity should not run'); },
+      source_count: 1, source_urls: ['https://a.example/story'], supporting_sources: ['source-a'],
+    };
+    const query = createQueryBuilder([existing]);
+    const { clusterStories } = loadClustering({ from: () => query });
+
+    await expect(clusterStories([{
+      url: 'https://b.example/story', source_id: 'source-b', raw_content: 'A long article body',
+      metadata: { title: 'New foundation model launches today' },
+    }])).resolves.toHaveLength(1);
+  });
+
   it('never acknowledges archive rows when story persistence fails', async () => {
     let acknowledged = false;
     const archive = createQueryBuilder([{
