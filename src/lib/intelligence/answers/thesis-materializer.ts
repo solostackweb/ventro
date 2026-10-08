@@ -46,7 +46,11 @@ export async function materializeStatedThesisRecords(): Promise<number> {
     id, subject_id, value_json, extraction_confidence, resolution_confidence,
     claim_evidence!claim_evidence_claim_id_fkey(
       id, stance,
-      document_versions!inner(source_documents!inner(source_connectors!inner(is_official)))
+      document_versions!claim_evidence_document_version_id_fkey(
+        source_documents!document_versions_source_document_id_fkey(
+          source_connectors!source_documents_source_id_fkey(is_official)
+        )
+      )
     )
   `).eq('subject_type', 'fund').eq('claim_type', 'thesis_statement').eq('publication_status', 'published').limit(2000);
   if (error) throw new Error(`STATED_THESIS_INPUT_FAILED:${error.message}`);

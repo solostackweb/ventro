@@ -58,7 +58,7 @@ const entities = {
 };
 
 describe('story clustering entity links', () => {
-  it('links the longest exact company name and a mentioned fund without promoting verification', async () => {
+  it('links the longest exact company name and an explicitly participating fund without promoting verification', async () => {
     const { clusterStories } = loadClustering();
     const clusters = await clusterStories([{
       url: 'https://publisher.example/acme-round',
@@ -68,7 +68,7 @@ describe('story clustering entity links', () => {
     }], entities);
 
     expect(clusters[0].companies).toEqual([{ company_id: 'company-1', role: 'primary' }]);
-    expect(clusters[0].investors).toEqual([{ fund_id: 'fund-1', role: 'mentioned' }]);
+    expect(clusters[0].investors).toEqual([{ fund_id: 'fund-1', role: 'participant' }]);
     expect(clusters[0].verification_label).toBe('unverified');
   });
 
@@ -123,6 +123,7 @@ describe('story clustering entity links', () => {
       if (table === 'stories') return story;
       if (table === 'companies') return catalog(entities.companies);
       if (table === 'funds') return catalog(entities.funds);
+      if (table === 'source_connectors') return catalog([]);
       return linkTable(table);
     } };
     const { runStoryClustering } = loadClustering(supabase);
@@ -130,7 +131,7 @@ describe('story clustering entity links', () => {
     await expect(runStoryClustering()).resolves.toBe(1);
     expect(links).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: 'story_companies', row: expect.objectContaining({ company_id: 'company-1', role: 'primary' }) }),
-      expect.objectContaining({ table: 'story_investors', row: expect.objectContaining({ fund_id: 'fund-1', role: 'mentioned' }) }),
+      expect.objectContaining({ table: 'story_investors', row: expect.objectContaining({ fund_id: 'fund-1', role: 'participant' }) }),
       expect.objectContaining({ table: 'story_sources', row: expect.objectContaining({ source_url: 'https://publisher.example/acme-round' }) }),
     ]));
     expect(acknowledged).toBe(true);

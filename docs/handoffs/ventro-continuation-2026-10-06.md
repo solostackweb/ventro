@@ -2194,3 +2194,50 @@ Manual rollout order:
 6. Verify News, Investments, Theses, Patterns, and Today. The workflow refreshes the 90-day answer snapshots after each successful dispatch.
 
 Status: `DONE_WITH_CONCERNS`. The code repair is complete and verified, but the hosted migration has not been pushed and the fixed commit has not been deployed. The live app will remain empty until those two external rollout steps and the workflow sequence complete.
+
+## Continuation Update — Hosted archive replay and publication repair 2 (2026-10-08)
+
+The user applied the prior migration and reran the hosted workflows, but the product still showed one unverified story, no investments, no theses, no patterns, and empty dashboard answers. A fresh read-only hosted diagnostic confirmed that collection is healthy while publication is blocked: `source_archive=2340`, `document_versions=2340`, `archive_pending=2340`, `stories=1`, `story_sources=0`, `claims=0`, `funding_rounds=0`, `round_participants=0`, `thesis_records=0`, and `patterns=0`.
+
+Confirmed root causes:
+
+- The latest full-refresh normalize stage dead-lettered because `story_sources.document_version_id` did not exist, although normalization writes that immutable evidence link.
+- All 40 seeded connectors still had `is_official=false`; therefore every newly clustered story was forced to `unverified`, regardless of being an official company, VC, YC, or government source.
+- The News page emits comma-delimited query parameters and string booleans, while `feedFilterSchema` expected arrays and a native boolean. Selecting `Verified only` or another filter could therefore fail validation instead of filtering.
+- The remaining stated-thesis PostgREST embed was ambiguous between `document_versions` and `source_documents`; the explicit relationship form was validated read-only against the hosted API and returned no relationship error.
+- Story clustering assigned every matched fund the role `mentioned`, while funding extraction intentionally accepts only explicit `lead` or `participant` roles. Consequently the investment graph could never receive participants.
+- Funding extraction upserted rounds before applying its deterministic stage/amount parsing, so every round was initially stored as stage `other` with no amount.
+
+Implemented locally:
+
+- Added pending migration `supabase/migrations/20261008060000_repair_story_publication_links.sql` to add/index `story_sources.document_version_id`, populate official-source trust metadata, derive independence groups, and reload the PostgREST schema cache.
+- Synchronized the story-source contract in `supabase/schema.sql`.
+- Made feed query validation accept the exact comma-separated arrays and `true`/`false` strings emitted by the UI.
+- Made story verification evidence-derived: one official connector or two independent connectors becomes `verified`; one known approved connector becomes `partial`; unknown sources remain `unverified`.
+- Added conservative investor-role extraction for explicit `led by`, `joined`, `participated`, `backed by`, `investment from`, and related language; ordinary mentions remain `mentioned`.
+- Made funding rounds persist the deterministic majority stage and amount extracted from their immutable document versions before the round upsert.
+- Added `scripts/diagnose-hosted-pipeline.ts` for read-only hosted counts, recent pipeline/stage failures, pending archive samples, official-source count, and relationship-contract validation.
+- Added/updated regression coverage for UI filter parsing, migration contracts, explicit thesis relationship paths, source-derived verification, investor-role safety, and round-stage persistence.
+
+Verification:
+
+- Hosted read-only contract check: explicit thesis relationship query passes; current official-source count is `0` until migration `20261008060000` is applied.
+- `npx supabase db push --dry-run`: passed and shows only `20261008060000_repair_story_publication_links.sql` pending.
+- Focused repair suites: 4 suites and 15 tests passed.
+- Full Jest run before the final two assertion-only additions: 44 suites and 383 tests passed; 1 Docker-only suite and 22 tests skipped. The focused suites passed again after those additions.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 199 warnings.
+- `npm run build`: passed; all 34 application pages generated.
+- `git diff --check`: passed.
+
+Required rollout order (no recrawl is needed):
+
+1. Apply the one pending migration with `npx supabase db push`.
+2. Commit and push this code so both GitHub Actions and Vercel deploy the repaired normalization, verification, filtering, funding, and thesis contracts.
+3. After deployment, manually dispatch `Scheduled Ingestion Pipeline` with `pipeline_type=news_ingestion`, blank `source_scope`, and `max_stages=8`. This replays all 2,340 pending hosted archive rows and is preferable to another expensive full refresh.
+4. After that run completes, verify that `source_archive.processed` rises, `stories` and `story_sources` populate, and News contains verified/partial items.
+5. Dispatch `thesis_extraction` with blank scope and `max_stages=2`.
+6. Dispatch `pattern_detection` with blank scope and `max_stages=1`.
+7. Refresh News, Investments, VC profiles, Theses, Patterns, and Today. Do not run two workflows of the same pipeline type concurrently. The eight-stage `news_ingestion` graph already includes funding extraction; use a separate `funding_extraction` run with `max_stages=4` only as an idempotent recovery run if the news replay succeeds but Investments remains empty.
+
+Status: `DONE_WITH_EXTERNAL_ROLLOUT_REQUIRED`. The code and migration are ready and verified. The live app will remain in its current sparse state until the hosted migration is pushed, the code is deployed, and the archive-replay workflow sequence completes.

@@ -143,6 +143,7 @@ describe('funding extraction association safety', () => {
     await extractFundingEvidence();
     expect(writes.rounds).toHaveLength(1);
     expect(writes.rounds[0].company_id).toBe('company-1');
+    expect(writes.rounds[0].round_stage).toBe('series_a');
     expect(writes.participants).toHaveLength(0);
   });
 

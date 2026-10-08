@@ -1,5 +1,15 @@
 import { z } from 'zod';
 
+const commaSeparatedArray = <T extends z.ZodTypeAny>(item: T) => z.preprocess(
+  value => typeof value === 'string' ? value.split(',').filter(Boolean) : value,
+  z.array(item).optional(),
+);
+
+const queryBoolean = z.preprocess(
+  value => value === 'true' ? true : value === 'false' ? false : value,
+  z.boolean().optional(),
+);
+
 export const onboardingStep1Schema = z.object({
   role: z.enum(['founder', 'investor', 'analyst', 'student', 'other']),
 });
@@ -112,29 +122,21 @@ export const alertRuleSchema = z.object({
 });
 
 export const feedFilterSchema = z.object({
-  topics: z
-    .array(
-      z.enum([
-        'foundation_models',
-        'infrastructure',
-        'applications',
-        'robotics',
-        'hardware',
-        'research',
-        'other',
-      ])
-    )
-    .optional(),
-  geographies: z
-    .array(z.enum(['us', 'india', 'eu', 'israel', 'canada', 'uk', 'sea', 'global']))
-    .optional(),
-  event_types: z
-    .array(z.enum(['funding', 'launch', 'partnership', 'research', 'acquisition', 'other']))
-    .optional(),
-  companies: z.array(z.string().uuid()).optional(),
-  investors: z.array(z.string().uuid()).optional(),
-  yc_batches: z.array(z.string()).optional(),
-  verified_only: z.boolean().optional(),
+  topics: commaSeparatedArray(z.enum([
+    'foundation_models',
+    'infrastructure',
+    'applications',
+    'robotics',
+    'hardware',
+    'research',
+    'other',
+  ])),
+  geographies: commaSeparatedArray(z.enum(['us', 'india', 'eu', 'israel', 'canada', 'uk', 'sea', 'global'])),
+  event_types: commaSeparatedArray(z.enum(['funding', 'launch', 'partnership', 'research', 'acquisition', 'other'])),
+  companies: commaSeparatedArray(z.string().uuid()),
+  investors: commaSeparatedArray(z.string().uuid()),
+  yc_batches: commaSeparatedArray(z.string()),
+  verified_only: queryBoolean,
   sort: z.enum(['latest', 'relevance']).optional(),
   page: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),

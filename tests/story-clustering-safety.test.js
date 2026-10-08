@@ -52,6 +52,26 @@ function loadClustering(supabase) {
 }
 
 describe('story clustering data safety', () => {
+  it('derives verification from official and independent source evidence', () => {
+    const { deriveStoryVerification } = loadClustering({ from: jest.fn() });
+    const profiles = [
+      { source_id: 'official-a', is_official: true, independence_group: 'official.example' },
+      { source_id: 'press-a', is_official: false, independence_group: 'press-a.example' },
+      { source_id: 'press-b', is_official: false, independence_group: 'press-b.example' },
+    ];
+    expect(deriveStoryVerification(['official-a'], profiles)).toBe('verified');
+    expect(deriveStoryVerification(['press-a', 'press-b'], profiles)).toBe('verified');
+    expect(deriveStoryVerification(['press-a'], profiles)).toBe('partial');
+    expect(deriveStoryVerification(['unknown'], profiles)).toBe('unverified');
+  });
+
+  it('only promotes investor roles when the story uses explicit participation language', () => {
+    const { classifyInvestorRole } = loadClustering({ from: jest.fn() });
+    expect(classifyInvestorRole('The round was led by Northstar Ventures.', 'Northstar Ventures')).toBe('lead');
+    expect(classifyInvestorRole('Northstar Ventures joined the financing.', 'Northstar Ventures')).toBe('participant');
+    expect(classifyInvestorRole('The founder previously worked with Northstar Ventures.', 'Northstar Ventures')).toBe('mentioned');
+  });
+
   it('retains new source attribution when a story matches an existing story', async () => {
     const headline = 'Company raises a large funding round for AI infrastructure';
     const summary = 'Company raises a large funding round for AI infrastructure today';

@@ -232,6 +232,7 @@ CREATE TABLE public.story_sources (
   published_at TIMESTAMPTZ,
   fetched_at TIMESTAMPTZ DEFAULT NOW(),
   content_hash TEXT,
+  document_version_id UUID REFERENCES public.document_versions(id) ON DELETE SET NULL,
   supports_claims JSONB, -- [{"claim": "...", "evidence_span": {...}}]
   UNIQUE(story_id, source_url)
 );
@@ -641,6 +642,7 @@ CREATE INDEX idx_stories_verification ON public.stories(verification_label);
 -- Story associations
 CREATE INDEX idx_story_companies_company ON public.story_companies(company_id);
 CREATE INDEX idx_story_investors_fund ON public.story_investors(fund_id);
+CREATE INDEX idx_story_sources_document_version ON public.story_sources(document_version_id);
 
 -- Source connectors
 CREATE INDEX idx_source_connectors_status ON public.source_connectors(status);

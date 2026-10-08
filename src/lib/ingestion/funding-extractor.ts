@@ -72,6 +72,12 @@ function parseAmount(text: string): { amount: number; currency: string } | null 
   return null;
 }
 
+function mostFrequent<T extends string | number>(values: T[], fallback: T): T {
+  const counts = new Map<T, number>();
+  for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? fallback;
+}
+
 function relatedName(relation: { canonical_name: string } | { canonical_name: string }[] | null | undefined): string | undefined {
   return Array.isArray(relation) ? relation[0]?.canonical_name : relation?.canonical_name;
 }
@@ -272,12 +278,22 @@ export async function extractFundingEvidence(): Promise<void> {
     const participantInvestors = storyInvestors.filter((si: { role: string }) => si.role === 'participant')
       .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
 
+    const parsedAmounts = docVersions
+      .map(dv => parseAmount(dv.normalized_text))
+      .filter((value): value is { amount: number; currency: string } => value !== null);
+    const parsedStages = docVersions
+      .map(dv => dv.normalized_text.match(/(pre-?seed|seed|series [a-e]|growth|late.?stage|ipo|public|acquisition|grant|debt|convertible|safe)/i)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map(normalizeStage)
+      .filter(stage => stage !== 'other');
+    const selectedAmount = mostFrequent(parsedAmounts.map(value => value.amount), 0);
+
     const event: FundingEvent = {
       company_name: companyName,
       company_id: companyId,
       announced_date: story.event_date || new Date().toISOString(),
-      round_stage: 'other', // Will be set per-document below
-      amount_usd: undefined, // Will be set per-document below
+      round_stage: mostFrequent(parsedStages, 'other'),
+      amount_usd: selectedAmount > 0 ? selectedAmount : undefined,
       amount_currency: 'USD',
       lead_investors: leadInvestors,
       participant_investors: participantInvestors,

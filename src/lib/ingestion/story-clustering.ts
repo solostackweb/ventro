@@ -67,7 +67,7 @@ interface ClusteredStory {
   publisher: string;
   source_count: number;
   companies: Array<{ company_id: string; role: 'primary' | 'mentioned' }>;
-  investors: Array<{ fund_id: string; role: 'mentioned' }>;
+  investors: Array<{ fund_id: string; role: 'lead' | 'participant' | 'mentioned' }>;
   ai_topics: string[];
   geography: string | null;
   event_type: string;
@@ -79,7 +79,23 @@ interface ClusteredStory {
 }
 
 interface NamedEntity { id: string; canonical_name: string }
-interface EntityCatalog { companies: NamedEntity[]; funds: NamedEntity[] }
+interface SourceTrustProfile {
+  source_id: string;
+  is_official: boolean | null;
+  independence_group: string | null;
+}
+interface EntityCatalog { companies: NamedEntity[]; funds: NamedEntity[]; sources?: SourceTrustProfile[] }
+
+export function deriveStoryVerification(
+  sourceIds: string[],
+  profiles: SourceTrustProfile[],
+): 'verified' | 'partial' | 'unverified' {
+  const relevant = profiles.filter(profile => sourceIds.includes(profile.source_id));
+  if (relevant.some(profile => profile.is_official === true)) return 'verified';
+  const independentGroups = new Set(relevant.map(profile => profile.independence_group || profile.source_id));
+  if (independentGroups.size >= 2) return 'verified';
+  return relevant.length > 0 ? 'partial' : 'unverified';
+}
 
 function matchNames(text: string, entities: NamedEntity[]): NamedEntity[] {
   const matches: { entity: NamedEntity; start: number; end: number }[] = [];
@@ -113,6 +129,26 @@ function matchNames(text: string, entities: NamedEntity[]): NamedEntity[] {
   return selected.sort((a, b) => a.start - b.start).map(item => item.entity);
 }
 
+export function classifyInvestorRole(
+  text: string,
+  investorName: string,
+): 'lead' | 'participant' | 'mentioned' {
+  const escapedName = investorName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  if (!escapedName) return 'mentioned';
+
+  const leadPatterns = [
+    new RegExp(`(?:led|co-led|colead(?:ed)?)\\s+(?:the\\s+)?(?:round\\s+)?by[^.!?]{0,100}\\b${escapedName}\\b`, 'i'),
+    new RegExp(`\\b${escapedName}\\b[^.!?]{0,100}(?:led|co-led|colead(?:ed)?)\\s+(?:the\\s+)?(?:round|financing|investment)`, 'i'),
+  ];
+  if (leadPatterns.some(pattern => pattern.test(text))) return 'lead';
+
+  const participantPatterns = [
+    new RegExp(`(?:participation\\s+from|backed\\s+by|investment\\s+from|investors?\\s+(?:include|included)|alongside)[^.!?]{0,140}\\b${escapedName}\\b`, 'i'),
+    new RegExp(`\\b${escapedName}\\b[^.!?]{0,100}(?:participated|joined|invested|backed)\\s+(?:in|the\\s+round|the\\s+financing)?`, 'i'),
+  ];
+  return participantPatterns.some(pattern => pattern.test(text)) ? 'participant' : 'mentioned';
+}
+
 async function loadNamedEntities(table: 'companies' | 'funds'): Promise<NamedEntity[]> {
   const rows: NamedEntity[] = [];
   for (let offset = 0; ; offset += 1000) {
@@ -123,6 +159,13 @@ async function loadNamedEntities(table: 'companies' | 'funds'): Promise<NamedEnt
     if (!data || data.length < 1000) break;
   }
   return rows;
+}
+
+async function loadSourceTrustProfiles(): Promise<SourceTrustProfile[]> {
+  const { data, error } = await ingestionSupabase.from('source_connectors')
+    .select('source_id,is_official,independence_group').eq('status', 'approved');
+  if (error) throw new Error(`source trust lookup failed: ${error.message}`);
+  return data ?? [];
 }
 
 async function computeContentHash(content: string): Promise<string> {
@@ -271,12 +314,19 @@ export async function clusterStories(newStories: FetchResult[], entities: Entity
   }
 
   for (const cluster of clusters) {
+    if (cluster.verification_label !== 'conflicted') {
+      cluster.verification_label = deriveStoryVerification(cluster.supporting_sources, entities.sources ?? []);
+    }
     const companyMatches = matchNames(cluster.headline || '', entities.companies);
     const fundMatches = matchNames(`${cluster.headline || ''} ${cluster.summary || ''}`, entities.funds);
     cluster.companies = companyMatches.map((company, index) => ({
       company_id: company.id, role: index === 0 ? 'primary' : 'mentioned',
     }));
-    cluster.investors = fundMatches.map(fund => ({ fund_id: fund.id, role: 'mentioned' }));
+    const investorContext = `${cluster.headline || ''} ${cluster.summary || ''}`;
+    cluster.investors = fundMatches.map(fund => ({
+      fund_id: fund.id,
+      role: classifyInvestorRole(investorContext, fund.canonical_name),
+    }));
   }
 
   return clusters;
@@ -401,10 +451,10 @@ export async function runStoryClustering(): Promise<number> {
   }));
 
   // Cluster stories
-  const [companies, funds] = await Promise.all([
-    loadNamedEntities('companies'), loadNamedEntities('funds'),
+  const [companies, funds, sources] = await Promise.all([
+    loadNamedEntities('companies'), loadNamedEntities('funds'), loadSourceTrustProfiles(),
   ]);
-  const clusters = await clusterStories(newStories, { companies, funds });
+  const clusters = await clusterStories(newStories, { companies, funds, sources });
 
   // Save clustered stories
   await saveClusteredStories(clusters);
