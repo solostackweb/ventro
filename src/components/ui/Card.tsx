@@ -21,8 +21,8 @@ export function Card({ children, className, hover, padding = 'md', ...props }: C
     <div
       {...props}
       className={cn(
-        'bg-bg-secondary border border-border-default rounded-xl transition-shadow',
-        hover && 'hover:shadow-lg cursor-pointer',
+        'rounded-md border border-rule bg-research transition-[border-color,background-color,box-shadow]',
+        hover && 'cursor-pointer hover:border-cyan-700/40 hover:bg-white hover:shadow-[0_12px_36px_rgba(4,21,34,0.08)]',
         paddings[padding],
         className
       )}
@@ -34,7 +34,7 @@ export function Card({ children, className, hover, padding = 'md', ...props }: C
 
 export function CardHeader({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('border-b border-border-default mb-4 pb-3', className)}>
+    <div className={cn('mb-4 border-b border-rule pb-3', className)}>
       {children}
     </div>
   );
@@ -46,7 +46,7 @@ export function CardContent({ children, className }: { children: React.ReactNode
 
 export function CardFooter({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('border-t border-border-default mt-4 pt-3 flex items-center gap-2', className)}>
+    <div className={cn('mt-4 flex items-center gap-2 border-t border-rule pt-3', className)}>
       {children}
     </div>
   );

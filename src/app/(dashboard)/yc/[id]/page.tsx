@@ -116,7 +116,7 @@ export default function YCBatchDetailPage() {
   const companies = activeTab === 'ai' ? aiCompanies : allCompanies;
 
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="app-page">
       <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/dashboard" className="text-xl font-bold text-text-primary">Ventro</Link>
@@ -128,9 +128,9 @@ export default function YCBatchDetailPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-8">
+      <main className="app-page-content">
         {/* Header */}
-        <div className="mb-8">
+        <div className="app-page-heading">
           <div className="flex items-center gap-3 mb-2">
             <span className="px-3 py-1 rounded-full text-sm font-medium bg-accent-blue/10 text-accent-blue">
               {batch.season} {batch.year}
@@ -149,7 +149,7 @@ export default function YCBatchDetailPage() {
         </div>
 
         {/* Tab Navigation */}
-        <div className="border-b border-border-default mb-6">
+        <div className="app-tabs mb-6">
           <nav className="flex gap-1" aria-label="YC batch sections">
             {[
               { id: 'ai', label: `AI Companies (${aiCompanies.length})` },

@@ -5,19 +5,8 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
-import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { cn, formatRelativeTime } from '@/lib/utils/helpers';
-
-interface DiscussionThread {
-  id: string;
-  entity_type: string;
-  entity_id: string;
-  title: string | null;
-  created_at: string;
-  updated_at: string;
-  discussion_comments: DiscussionComment[];
-}
 
 interface DiscussionComment {
   id: string;
@@ -67,6 +56,7 @@ export default function CommunityPage() {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState('');
   const [replying, setReplying] = useState(false);
+  const [creatingThread, setCreatingThread] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [profile, setProfile] = useState<{ name: string; avatar: string; entitlement: string } | null>(null);
@@ -78,40 +68,6 @@ export default function CommunityPage() {
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
       
-      let query = supabase
-        .from('discussion_threads')
-        .select(`
-          id,
-          entity_type,
-          entity_id,
-          title,
-          created_at,
-          updated_at,
-          discussion_comments (
-            id,
-            thread_id,
-            user_id,
-            parent_id,
-            content,
-            is_hidden,
-            created_at,
-            updated_at,
-            user_profiles!inner (
-              id,
-              email,
-              role
-            )
-          )
-        `, { count: 'exact' })
-        .order('created_at', { ascending: false });
-
-      if (activeTab === 'my-threads' && session) {
-        query = query.contains('discussion_comments.user_id', [session.user.id]);
-      }
-
-      const offset = (page - 1) * 10;
-      query = query.range(offset, offset + 9);
-
       const response = await fetch(`/api/community?${new URLSearchParams({
         page: page.toString(),
         limit: '10',
@@ -173,8 +129,7 @@ export default function CommunityPage() {
     }
   };
 
-  const handleCreateThread = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateThread = async () => {
     if (!newComment.trim()) return;
     if (!profile || (profile.entitlement !== 'subscribed' && profile.entitlement !== 'student_trial')) return;
 
@@ -195,6 +150,7 @@ export default function CommunityPage() {
       setThreads([data.thread, ...threads]);
       setSelectedThread(data.thread);
       setNewComment('');
+      setCreatingThread(false);
       setReplying(false);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to create thread');
@@ -227,8 +183,6 @@ export default function CommunityPage() {
   function ThreadDetail() {
     if (!selectedThread) return null;
 
-    const canReply = profile?.entitlement === 'subscribed' || profile?.entitlement === 'student_trial';
-
     let replyForm = null;
     if (profile && (profile.entitlement === 'subscribed' || profile.entitlement === 'student_trial') && !replyingTo) {
       replyForm = (
@@ -248,7 +202,7 @@ export default function CommunityPage() {
               <div className="flex justify-end mt-2">
                 <button 
                   className="px-4 py-2 text-sm font-medium rounded-lg bg-accent-blue text-white hover:bg-accent-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={() => { setReplyingTo('new'); setNewComment(''); }} disabled={!newComment.trim()}>
+                  onClick={handlePostComment} disabled={!newComment.trim() || replying}>
                   Post Reply
                 </button>
               </div>
@@ -273,7 +227,7 @@ export default function CommunityPage() {
               />
               <div className="flex justify-end mt-2">
                 <button className="px-4 py-2 text-sm font-medium rounded-lg border border-border-default bg-bg-secondary hover:bg-bg-tertiary transition-colors" onClick={() => { setReplyContent(''); setReplyingTo(null); }}>Cancel</button>
-                <button onClick={() => handleReply('new')} disabled={!replyContent.trim()} className="px-4 py-2 text-sm font-medium rounded-lg bg-accent-blue text-white hover:bg-accent-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onClick={() => handleReply(selectedThread.id)} disabled={!replyContent.trim() || replying} className="px-4 py-2 text-sm font-medium rounded-lg bg-accent-blue text-white hover:bg-accent-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                   Post Reply
                 </button>
               </div>
@@ -304,7 +258,7 @@ export default function CommunityPage() {
           Back to discussions
         </button>
 
-        <div className="p-4 border border-border-default rounded-lg bg-bg-primary">
+        <div className="rounded-md border border-rule bg-white p-5">
           <div className="flex items-center gap-2 mb-2">
             <span className="px-2 py-1 text-xs font-medium rounded-full bg-accent-blue/10 text-accent-blue">{selectedThread?.entity_type}</span>
             <a href="#" className="text-accent-blue hover:underline text-sm">
@@ -329,9 +283,9 @@ export default function CommunityPage() {
                     </div>
                     <p style={{color: 'var(--text-secondary)'}}>{comment.content}</p>
                     <div style={{display: 'flex', gap: 12, marginTop: 8, fontSize: 13, color: 'var(--text-muted)'}}>
-                      <button 
+                      <button
                         className="gap-1 h-auto p-0 text-text-muted hover:text-text-primary"
-                        onClick={() => {}}>
+                        onClick={() => setReplyingTo(comment.id)}>
                         Reply
                       </button>
                     </div>
@@ -340,6 +294,7 @@ export default function CommunityPage() {
               </div>
               ))}
           </div>
+          {replyForm}
         </div>
       </div>
     );
@@ -347,71 +302,39 @@ export default function CommunityPage() {
 
   function renderThreadList() {
     return (
-      <div>
-        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24}}>
-          <div style={{display: 'flex', gap: 8}}>
+      <div className="space-y-5">
+        <div className="flex flex-col justify-between gap-3 border-b border-rule pb-4 sm:flex-row sm:items-center">
+          <div className="flex gap-1" role="tablist" aria-label="Community discussions">
             {['browse', 'my-threads'].map((t) => (
               <button
                 key={t}
                 onClick={() => { setActiveTab(t as 'browse' | 'my-threads'); setPage(1); }}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  borderRadius: 8,
-                  transition: 'all 0.2s',
-                  border: 'none',
-                  background: activeTab === t ? 'var(--accent-blue)' : 'transparent',
-                  color: activeTab === t ? 'white' : 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
+                className={cn('min-h-11 rounded-sm px-4 text-sm font-semibold transition-colors', activeTab === t ? 'bg-ink-950 text-white' : 'text-ink-500 hover:bg-ink-950/[0.05] hover:text-ink-950')}
+                role="tab"
+                aria-selected={activeTab === t}
               >
                 {t === 'browse' ? 'All Discussions' : 'My Threads'}
               </button>
             ))}
           </div>
-          <button 
-            style={{
-              padding: '8px 16px',
-              fontSize: 14,
-              fontWeight: 500,
-              borderRadius: 8,
-              transition: 'all 0.2s',
-              border: 'none',
-              background: 'var(--accent-blue)',
-              color: 'white',
-              cursor: 'pointer'
-            }}
-            onClick={() => { setNewComment(''); setReplyingTo('new'); }}>
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-            New Discussion
-          </button>
+          <Button onClick={() => { setNewComment(''); setCreatingThread(true); }}>New discussion</Button>
         </div>
 
-        <div style={{marginBottom: 24}}>
-          <div style={{fontSize: 18, fontWeight: 600, marginBottom: 8}}>No discussions yet</div>
-          <p style={{color: 'var(--text-secondary)', marginBottom: 16}}>Start the conversation!</p>
-          <button style={{
-            padding: '10px 20px',
-            fontSize: 14,
-            fontWeight: 500,
-            borderRadius: 8,
-            transition: 'all 0.2s',
-            border: '1px solid var(--border-default)',
-            background: 'var(--bg-secondary)',
-            color: 'var(--text-primary)',
-            cursor: 'pointer'
-          }} onClick={() => {}}>
-            Start a Discussion
-          </button>
-        </div>
+        {creatingThread && <Card className="border-cyan-700/30 bg-white"><CardHeader><div><p className="eyebrow text-cyan-700">New discussion</p><h2 className="mt-1 text-xl font-semibold text-ink-950">Share a market observation</h2></div></CardHeader><CardContent className="space-y-3"><textarea value={newComment} onChange={event => setNewComment(event.target.value)} placeholder="What are you seeing in the AI market? Add the signal, source, and your interpretation." className="min-h-32 w-full resize-y rounded-md border border-rule bg-white p-3 text-sm leading-6 outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-600/20" /><div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setCreatingThread(false)}>Cancel</Button><Button onClick={handleCreateThread} loading={replying} disabled={!newComment.trim()}>Publish discussion</Button></div></CardContent></Card>}
+
+        {loading && <div className="space-y-3" aria-label="Loading discussions">{[0, 1, 2].map(item => <div key={item} className="h-32 animate-pulse rounded-md border border-rule bg-white" />)}</div>}
+        {error && <div className="state-panel state-panel-error"><div className="flex-1"><h2>Discussions unavailable</h2><p>{error}</p></div><Button variant="secondary" onClick={fetchThreads}>Retry</Button></div>}
+        {!loading && !error && threads.length === 0 && <div className="app-empty-state"><h2 className="text-lg font-semibold text-ink-950">No discussions yet</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6">Start with a specific market signal, funding event, or investor thesis others can investigate with you.</p><Button className="mt-5" onClick={() => setCreatingThread(true)}>Start the first discussion</Button></div>}
+        {!loading && !error && threads.length > 0 && <div className="divide-y divide-rule border-y border-rule bg-white">{threads.map(thread => <button key={thread.id} type="button" onClick={() => setSelectedThread(thread)} className="block w-full px-5 py-5 text-left transition-colors hover:bg-research-muted"><div className="flex flex-wrap items-center gap-2"><Badge variant="blue">{thread.entity_type}</Badge><span className="text-xs text-ink-500">{formatRelativeTime(thread.updated_at)}</span></div><h2 className="mt-2 text-lg font-semibold tracking-[-0.015em] text-ink-950">{thread.title || 'Untitled discussion'}</h2><div className="mt-3 flex items-center gap-4 text-xs font-medium text-ink-500"><span>{thread.discussion_comments?.length || 0} replies</span><span>Open discussion →</span></div></button>)}</div>}
+
+        {!loading && !error && (page > 1 || hasMore) && <div className="flex items-center justify-between"><Button variant="secondary" disabled={page === 1} onClick={() => setPage(current => Math.max(1, current - 1))}>Previous</Button><span className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-500">Page {page}</span><Button variant="secondary" disabled={!hasMore} onClick={() => setPage(current => current + 1)}>Next</Button></div>}
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-bg-primary">
-      <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
+    <div className="app-page">
+      <header className="app-route-label sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/dashboard" className="text-xl font-bold text-text-primary">Ventro</Link>
           <Link href="/community" className="hidden sm:block px-4 py-2 rounded-lg bg-accent-blue/10 text-accent-blue text-sm font-medium">
@@ -420,13 +343,13 @@ export default function CommunityPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 py-8">
-        <div className="mb-8">
+      <main className="app-page-content app-page-content-narrow">
+        <div className="app-page-heading">
           <h1 className="text-3xl font-bold mb-2">Community</h1>
           <p className="text-text-secondary">Discuss companies, investors, and patterns with verified members</p>
         </div>
 
-        <div>Community page content here</div>
+        {selectedThread ? ThreadDetail() : renderThreadList()}
       </main>
     </div>
   );

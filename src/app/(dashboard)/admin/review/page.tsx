@@ -135,7 +135,7 @@ export default function ReviewQueuePage() {
     { key: 'pattern', label: 'Patterns' },
   ];
 
-  return <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+  return <main className="app-page-content max-w-6xl space-y-6">
     <div className="flex items-center justify-between gap-4">
       <div><h1 className="text-3xl font-bold">Review queue</h1>
         <p className="text-text-secondary">Every decision needs a source and a reviewer reason. Rounds and investor roles are reviewed separately.</p></div>

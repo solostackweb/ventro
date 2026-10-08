@@ -2121,3 +2121,32 @@ Status: `DONE_WITH_CONCERNS`. Code, tests, lint, typecheck, and production build
 - Next manual action remains `npx supabase db reset --linked`; migration `20261008040000` must appear before seeding begins.
 - Follow-up seed correction: `yc-directory` in the extended seed used `commercial_use_allowed='unknown'`; the canonical constraint uses `unclear`, matching the primary seed. The extended row now uses `unclear`.
 - Root test defect fixed: the connector-seed parser previously treated a semicolon inside a quoted notes field as the end of the SQL statement, so it silently validated only the first part of the extended seed. It now finds only an unquoted statement terminator and therefore validates all connector rows.
+
+## Continuation Update — Authenticated App Visual System Pass (2026-10-08)
+
+The authenticated application has received a cross-route UI repair. The public landing page was intentionally left unchanged for a later pass.
+
+Implemented:
+
+- Replaced the mismatched 236px/256px desktop offsets with one 256px sidebar contract and added a fixed 72px workspace bar.
+- Added a functional global research search that sends queries into the News feed.
+- Removed the fragile global rule that hid every legacy nested header, which had also hidden important follow/share/report actions on detail routes.
+- Added shared application canvas, content-width, narrow-reading, page-heading, filter-panel, tab, empty-state, and detail-toolbar treatments.
+- Migrated admin, alerts, community, companies, investments, investors, news, patterns, saved, settings, YC, and all corresponding detail routes onto the shared app canvas.
+- Preserved the stronger dashboard and Thesis Engine compositions while aligning them with the same navigation frame.
+- Restyled shared Card, Button, Input, Textarea, Select, MultiSelect, and Badge primitives around the approved ink/ivory, restrained-cyan editorial system and 44px interaction targets.
+- Repaired the Community route, which previously rendered only `Community page content here` despite having data logic. It now has loading, error, empty, populated, pagination, composer, and thread-detail states.
+- Added `tests/application-visual-system.test.js` covering the shared canvas across 16 routes, shell alignment, integrated detail toolbars, functional workspace search, and Community rendering states.
+
+Verification:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 197 existing warnings. Focused ESLint for the changed Community, shell, and shared UI files also had 0 errors.
+- Focused UI contracts: 2 suites, 30 tests passed.
+- Full Jest run: 43 suites passed, 1 Docker-only database suite skipped; 371 tests passed and 22 database tests skipped.
+- `npm run build`: passed after clearing the disposable `.next` cache and allowing Google Fonts network access; 34 application routes generated.
+- `git diff --check`: passed.
+
+Remaining verification concern:
+
+- Authenticated rendered-browser QA still requires a valid signed-in browser session or deployed preview. The development server was healthy on Windows, but the Codex in-app browser timed out against both `localhost:3000` and the advertised LAN address, matching the earlier environment limitation. Static contracts, TypeScript, Jest, Tailwind/webpack compilation, and the production route build pass, but no new authenticated screenshot is claimed from this environment.

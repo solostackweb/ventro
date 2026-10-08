@@ -26,7 +26,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           ref={ref}
           id={selectId}
           className={cn(
-            'w-full rounded-lg border bg-bg-primary px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent appearance-none',
+            'min-h-11 w-full appearance-none rounded-md border bg-white px-3 py-2 text-sm text-ink-950 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-600/20',
             error ? 'border-accent-red' : 'border-border-default',
             className
           )}
@@ -124,7 +124,7 @@ export function MultiSelect<T extends string>({ label, error, hint, options, val
         onClick={() => setIsOpen(!isOpen)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsOpen(!isOpen); } }}
         className={cn(
-          'w-full rounded-lg border bg-bg-primary px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent cursor-pointer',
+          'min-h-11 w-full cursor-pointer rounded-md border bg-white px-3 py-2 text-left text-sm text-ink-950 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-600/20',
           error ? 'border-accent-red' : 'border-border-default'
         )}
         aria-expanded={isOpen}
@@ -155,7 +155,7 @@ export function MultiSelect<T extends string>({ label, error, hint, options, val
       {isOpen && (
         <div
           ref={dropdownRef}
-          className="absolute z-50 w-full mt-1 bg-bg-secondary border border-border-default rounded-lg shadow-lg max-h-60 overflow-auto"
+          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-rule bg-white shadow-[0_18px_50px_rgba(4,21,34,0.16)]"
           role="listbox"
         >
           {searchable && (

@@ -152,8 +152,8 @@
   .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.18em]; }
   .font-numeric { font-variant-numeric: tabular-nums; }
 
-  .app-sidebar { @apply fixed inset-y-0 left-0 z-50 w-[236px] border-r border-white/10 bg-ink-950 text-white; }
-  .app-main > div > header:not(.intelligence-masthead):not(.engine-masthead) { display: none; }
+  .app-sidebar { @apply fixed inset-y-0 left-0 z-50 w-[256px] border-r border-white/10 bg-ink-950 text-white; }
+  .app-main { @apply min-w-0 bg-research pb-16 lg:pb-0; }
   .app-sidebar::after { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .08; background-image: linear-gradient(rgba(255,255,255,.16) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.16) 1px, transparent 1px); background-size: 42px 42px; mask-image: linear-gradient(to bottom, transparent, #000 30%, #000); }
   .brand-lockup { @apply relative z-10 flex items-start gap-3 text-white; }
   .brand-lockup strong { @apply block text-xl font-black tracking-[0.12em]; }
@@ -167,6 +167,33 @@
   .mobile-bottom-nav { @apply fixed inset-x-0 bottom-0 z-50 grid grid-cols-5 border-t border-rule bg-research/95 px-[env(safe-area-inset-left)] pb-[env(safe-area-inset-bottom)] backdrop-blur; }
   .mobile-nav-link { @apply flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium text-ink-500; }
   .icon-button { @apply inline-flex h-11 w-11 items-center justify-center rounded-sm border border-rule text-ink-600 transition-colors hover:bg-black/5 hover:text-ink-950; }
+
+  .app-workspace-bar { @apply fixed left-[256px] right-0 top-0 z-40 h-[72px] items-center gap-5 border-b border-rule bg-research/95 px-8 backdrop-blur; }
+  .app-workspace-bar .app-search { @apply w-full max-w-[680px] border-rule bg-white text-ink-600 shadow-sm; }
+  .app-workspace-bar .app-search input { @apply text-ink-950 placeholder:text-ink-400; }
+  .app-workspace-bar .app-search kbd { @apply rounded-sm border border-rule bg-research-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-500; }
+  .workspace-icon-link { @apply inline-flex h-11 w-11 items-center justify-center rounded-sm text-ink-500 transition-colors hover:bg-ink-950/[0.05] hover:text-ink-950; }
+  .workspace-account { @apply ml-2 min-w-36 border-l border-rule pl-4; }
+  .workspace-account span { @apply block max-w-44 truncate text-sm font-semibold text-ink-950; }
+  .workspace-account small { @apply mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700; }
+
+  .app-page { @apply min-h-screen bg-research; }
+  .app-route-label { display: none; }
+  .app-page-content { @apply mx-auto w-full max-w-[1440px] px-4 py-7 sm:px-6 sm:py-9 lg:px-8 lg:py-10; }
+  .app-page-content-narrow { @apply max-w-[980px]; }
+  .app-page-heading { @apply mb-7 border-b border-rule pb-6; }
+  .app-page-heading h1 { @apply text-3xl font-semibold tracking-[-0.035em] text-ink-950 sm:text-4xl; }
+  .app-page-heading p { @apply mt-2 max-w-3xl text-sm leading-6 text-ink-600; }
+  .app-filter-panel { @apply border-rule bg-white shadow-none; }
+  .app-tabs { @apply flex gap-1 overflow-x-auto border-b border-rule bg-transparent; }
+  .app-tabs a, .app-tabs button { @apply min-h-11 shrink-0 px-3 text-sm font-semibold text-ink-500; }
+  .app-empty-state { @apply border border-dashed border-rule bg-white px-5 py-12 text-center text-ink-500; }
+
+  /* Older routes keep their local action rows, but the shared shell owns identity and navigation. */
+  .app-main > .app-page > header:not(.intelligence-masthead):not(.engine-masthead) { @apply sticky z-30 border-b border-rule bg-research/95 backdrop-blur; top: 64px !important; }
+  .app-main > .app-page > header:not(.intelligence-masthead):not(.engine-masthead) > div { @apply mx-auto flex min-h-14 w-full max-w-[1440px] items-center px-4 sm:px-6 lg:px-8; height: auto !important; }
+  .app-main > .app-page > header:not(.intelligence-masthead):not(.engine-masthead) > div > a:first-child { @apply text-xs font-semibold uppercase tracking-[0.16em] text-ink-500; }
+  .app-main > .app-page > header:not(.intelligence-masthead):not(.engine-masthead) > div > div:last-child { @apply ml-auto; }
 
   .intelligence-page { @apply min-h-screen bg-ink-950; }
   .intelligence-masthead { @apply mx-auto flex max-w-[1540px] flex-col justify-between gap-5 px-4 pb-5 pt-7 text-white sm:px-6 md:flex-row md:items-end lg:px-8; }
@@ -222,6 +249,10 @@
   .landing-primary { @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-sm bg-cyan-300 px-5 text-sm font-semibold text-ink-950 transition-colors hover:bg-cyan-200; }
   .landing-secondary { @apply inline-flex min-h-12 items-center justify-center rounded-sm border border-white/20 px-5 text-sm font-semibold text-white transition-colors hover:border-white/40 hover:bg-white/[0.05]; }
   .landing-intelligence { @apply overflow-hidden rounded-sm border border-white/20 bg-ink-900 shadow-2xl; }
+}
+
+@media (min-width: 1024px) {
+  .app-main > .app-page > header:not(.intelligence-masthead):not(.engine-masthead) { top: 72px !important; }
 }
 
 @layer utilities {

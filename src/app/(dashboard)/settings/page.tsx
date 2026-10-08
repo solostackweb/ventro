@@ -213,7 +213,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="app-page">
       <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
         <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/dashboard" className="text-xl font-bold text-text-primary">Ventro</Link>
@@ -225,8 +225,8 @@ export default function SettingsPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-8">
-        <div className="mb-8">
+      <main className="app-page-content app-page-content-narrow">
+        <div className="app-page-heading">
           <h1 className="text-3xl font-bold mb-2">Settings</h1>
           <p className="text-text-secondary">Manage your account, preferences, and alerts</p>
         </div>
@@ -241,7 +241,7 @@ export default function SettingsPage() {
         )}
 
         {/* Tab Navigation */}
-        <div className="border-b border-border-default mb-8">
+        <div className="app-tabs mb-8">
           <nav className="flex gap-1" aria-label="Settings sections">
             {[
               { id: 'profile', label: 'Profile' },

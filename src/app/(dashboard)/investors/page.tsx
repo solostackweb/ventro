@@ -166,8 +166,8 @@ export default function InvestorsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg-primary">
-      <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
+    <div className="app-page">
+      <header className="app-route-label sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/dashboard" className="text-xl font-bold text-text-primary">Ventro</Link>
           <Link href="/investors" className="hidden sm:block px-4 py-2 rounded-lg bg-accent-blue/10 text-accent-blue text-sm font-medium">
@@ -176,14 +176,14 @@ export default function InvestorsPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-8">
+      <main className="app-page-content">
+        <div className="app-page-heading">
           <h1 className="text-3xl font-bold mb-2">Investors</h1>
           <p className="text-text-secondary">Browse {totalFunds || 'AI-focused'} investors in our catalog</p>
         </div>
 
         {/* Filters */}
-        <Card className="mb-6">
+        <Card className="app-filter-panel mb-6">
           <CardContent className="p-4">
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="flex-1 min-w-[250px]">

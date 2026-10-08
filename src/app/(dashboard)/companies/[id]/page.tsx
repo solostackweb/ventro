@@ -215,7 +215,7 @@ export default function CompanyProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="app-page">
       <header className="sticky top-0 z-40 border-b border-border-default bg-bg-primary/80 backdrop-blur-sm">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/dashboard" className="text-xl font-bold text-text-primary">Ventro</Link>
@@ -249,8 +249,8 @@ export default function CompanyProfilePage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-6">
+      <main className="app-page-content">
+        <div className="app-page-heading mb-6">
           <Link href="/companies" className="text-sm text-text-muted hover:text-text-primary">
             ← Back to Companies
           </Link>
