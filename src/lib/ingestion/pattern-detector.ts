@@ -350,8 +350,249 @@ function detectStageShift(
   return patterns;
 }
 
+function ycBatchTimestamp(batch: { year?: number; season?: string; demo_day_date?: string | null }): number {
+  if (batch.demo_day_date) return new Date(batch.demo_day_date).getTime();
+  const month = batch.season === 'W' ? 2 : batch.season === 'P' ? 4 : batch.season === 'S' ? 7 : 10;
+  return Date.UTC(batch.year ?? 1970, month, 15);
+}
+
+async function materializeYcPatterns(): Promise<number> {
+  const supabase = ingestionSupabase;
+  const { data: memberships, error } = await supabase.from('yc_batch_companies').select(`
+    batch_id, company_id, is_ai_company,
+    companies!inner(id, canonical_name, ai_tags),
+    yc_batches!inner(id, batch_name, year, season, demo_day_date)
+  `).eq('is_ai_company', true).limit(10000);
+  if (error) throw new Error(`YC pattern input failed: ${error.message}`);
+  const { data: claims, error: claimError } = await supabase.from('claims').select(`
+    id, subject_id, value_json, publication_status,
+    claim_evidence!claim_evidence_claim_id_fkey(id,stance,document_version_id)
+  `).eq('subject_type', 'company').eq('claim_type', 'yc_batch').eq('predicate', 'yc_membership')
+    .eq('publication_status', 'published').limit(20000);
+  if (claimError) throw new Error(`YC pattern evidence failed: ${claimError.message}`);
+  const claimByMembership = new Map<string, any>();
+  for (const claim of claims ?? []) claimByMembership.set(`${claim.subject_id}:${claim.value_json?.batch_id ?? ''}`, claim);
+  const rows = ((memberships ?? []) as any[]).flatMap(row => {
+    const claim = claimByMembership.get(`${row.company_id}:${row.batch_id}`);
+    return claim ? [{ ...row, claim }] : [];
+  });
+  const batches = [...new Map(rows.map(row => [row.batch_id, row.yc_batches])).entries()]
+    .map(([id, batch]) => ({ id, ...(batch as any) }))
+    .filter(batch => ycBatchTimestamp(batch) <= Date.now())
+    .sort((a, b) => ycBatchTimestamp(b) - ycBatchTimestamp(a));
+  const recentCutoff = Date.now() - 18 * 30 * 24 * 60 * 60 * 1000;
+  const recentBatches = batches.filter(batch => ycBatchTimestamp(batch) >= recentCutoff).slice(0, 3);
+  if (recentBatches.length < 2) return 0;
+  const currentBatchIds = new Set(recentBatches.map(batch => batch.id));
+  const currentRows = rows.filter(row => currentBatchIds.has(row.batch_id));
+  const themes = [...new Set(currentRows.flatMap(row => row.companies?.ai_tags ?? []))];
+  let written = 0;
+  const activePatternIds = new Set<string>();
+  for (const theme of themes) {
+    const qualifying = currentRows.filter(row => (row.companies?.ai_tags ?? []).includes(theme));
+    const companyIds = new Set(qualifying.map(row => row.company_id));
+    if (companyIds.size < 5) continue;
+    const currentShare = currentRows.length ? qualifying.length / currentRows.length : 0;
+    if (currentShare < 0.1) continue;
+    const citations = qualifying.flatMap(row => (row.claim.claim_evidence ?? [])
+      .filter((evidence: any) => evidence.stance === 'supports')
+      .map((evidence: any) => ({ claim_id: row.claim.id, claim_evidence_id: evidence.id, stance: 'supports' })));
+    const uniqueCitations = [...new Map(citations.map(citation => [`${citation.claim_id}:${citation.claim_evidence_id}`, citation])).values()];
+    if (uniqueCitations.length < 3) continue;
+    const windowStart = new Date(Math.min(...recentBatches.map(ycBatchTimestamp))).toISOString();
+    const windowEnd = new Date(Math.max(...recentBatches.map(ycBatchTimestamp)) + 24 * 60 * 60 * 1000).toISOString();
+    const humanTheme = theme.replaceAll('_', ' ');
+    const inputFingerprint = fingerprint({
+      theme,
+      currentBatches: recentBatches.map(batch => batch.id),
+      companyIds: [...companyIds].sort(),
+      methodology: 'official-yc-batch-theme-concentration-v1',
+    });
+    const { data: stored, error: storeError } = await supabase.from('patterns').upsert({
+      name: `${humanTheme.replace(/\b\w/g, (char: string) => char.toUpperCase())} Concentration Across Recent YC Batches`,
+      description: `${qualifying.length} of ${currentRows.length} AI companies (${(currentShare * 100).toFixed(1)}%) across ${recentBatches.map(batch => batch.id).join(', ')} are tagged ${humanTheme}.`,
+      time_window_start: windowStart,
+      time_window_end: windowEnd,
+      baseline_value: null,
+      current_value: qualifying.length,
+      change_percentage: null,
+      distinct_companies: companyIds.size,
+      distinct_funds: 1,
+      qualifying_events: qualifying.map(row => ({
+        company_id: row.company_id,
+        company_name: row.companies?.canonical_name,
+        yc_batch: row.batch_id,
+        ai_topic: theme,
+        source_url: row.claim.value_json?.source_url,
+      })),
+      counterexamples: [],
+      confidence: companyIds.size >= 20 ? 'high' : companyIds.size >= 10 ? 'medium' : 'low',
+      coverage_notes: `Descriptive composition of AI-tagged companies across recent completed YC batches. This is not a claim about funding volume or historical acceleration. YC directory membership is official; tags are deterministic classifications of company descriptions.`,
+      status: 'published',
+      source_links: [...new Set(qualifying.map(row => row.claim.value_json?.source_url).filter(Boolean))].slice(0, 25),
+      pattern_type: 'yc_batch_theme_concentration',
+      filter_dimensions: { domains: [theme], yc_batches: recentBatches.map(batch => batch.id) },
+      baseline_window_start: null,
+      baseline_window_end: null,
+      sample_size: qualifying.length,
+      qualifying_claim_ids: uniqueCitations.map(citation => citation.claim_id),
+      independent_source_count: 1,
+      coverage_metrics: { recent_ai_companies: currentRows.length, current_theme_share: currentShare, included_batches: recentBatches.map(batch => batch.id) },
+      sensitivity: { recent_batch_count: recentBatches.length, lookback_months: 18, minimum_companies: 5, minimum_current_share: 0.1 },
+      methodology_version: 'official-yc-batch-theme-concentration-v1',
+      input_fingerprint: inputFingerprint,
+      publication_reason: 'Published automatically as a descriptive concentration from official YC directory membership with deterministic topic classification',
+    }, { onConflict: 'input_fingerprint' }).select('id').single();
+    if (storeError) throw new Error(`YC pattern write failed: ${storeError.message}`);
+    activePatternIds.add(stored.id);
+    const { error: deleteError } = await supabase.from('pattern_citations').delete().eq('pattern_id', stored.id);
+    if (deleteError) throw new Error(`YC pattern citation reset failed: ${deleteError.message}`);
+    const { error: citationError } = await supabase.from('pattern_citations').insert(uniqueCitations.map(citation => ({
+      pattern_id: stored.id,
+      claim_id: citation.claim_id,
+      claim_evidence_id: citation.claim_evidence_id,
+      stance: citation.stance,
+    })));
+    if (citationError) throw new Error(`YC pattern citations failed: ${citationError.message}`);
+    written++;
+  }
+  const { data: previousPatterns, error: previousError } = await supabase.from('patterns').select('id')
+    .in('methodology_version', ['official-yc-batch-theme-trends-v1', 'official-yc-batch-theme-concentration-v1'])
+    .in('status', ['published', 'corrected']);
+  if (previousError) throw new Error(`YC pattern history read failed: ${previousError.message}`);
+  for (const previous of previousPatterns ?? []) {
+    if (activePatternIds.has(previous.id)) continue;
+    const { error: retireError } = await supabase.from('patterns').update({
+      status: 'retired',
+      publication_reason: 'Retired automatically because its comparison included a future YC batch or was superseded by the latest eligible batch window',
+    }).eq('id', previous.id);
+    if (retireError) throw new Error(`YC pattern retirement failed: ${retireError.message}`);
+  }
+  return written;
+}
+
+async function materializePortfolioPatterns(): Promise<number> {
+  const supabase = ingestionSupabase;
+  const { data: relationships, error } = await supabase.from('fund_portfolio').select(`
+    id, fund_id, company_id, verification_status, source_url, last_verified_at, updated_at,
+    companies!inner(id, canonical_name, ai_tags),
+    funds!inner(id, canonical_name)
+  `).in('verification_status', ['verified', 'partial']).limit(10000);
+  if (error) throw new Error(`Portfolio pattern input failed: ${error.message}`);
+  const { data: claims, error: claimError } = await supabase.from('claims').select(`
+    id, subject_id, value_json, publication_status,
+    claim_evidence!claim_evidence_claim_id_fkey(
+      id, stance, document_version_id,
+      document_versions!claim_evidence_document_version_id_fkey(
+        source_documents!document_versions_source_document_id_fkey(
+          domain, source_connectors!source_documents_source_id_fkey(independence_group)
+        )
+      )
+    )
+  `).eq('subject_type', 'fund').eq('claim_type', 'other').eq('predicate', 'portfolio_company')
+    .eq('publication_status', 'published').limit(20000);
+  if (claimError) throw new Error(`Portfolio pattern evidence failed: ${claimError.message}`);
+  const claimByRelationship = new Map<string, any>();
+  for (const claim of claims ?? []) {
+    claimByRelationship.set(`${claim.subject_id}:${claim.value_json?.company_id ?? ''}`, claim);
+  }
+  const byTheme = new Map<string, any[]>();
+  for (const relationship of (relationships ?? []) as any[]) {
+    const claim = claimByRelationship.get(`${relationship.fund_id}:${relationship.company_id}`);
+    if (!claim) continue;
+    for (const theme of relationship.companies?.ai_tags ?? []) {
+      byTheme.set(theme, [...(byTheme.get(theme) ?? []), { ...relationship, claim }]);
+    }
+  }
+  let written = 0;
+  for (const [theme, rows] of byTheme) {
+    const companyIds = new Set(rows.map(row => row.company_id));
+    const fundIds = new Set(rows.map(row => row.fund_id));
+    if (rows.length < 3 || companyIds.size < 3 || fundIds.size < 2) continue;
+    const citations = rows.flatMap(row => (row.claim.claim_evidence ?? [])
+      .filter((evidence: any) => evidence.stance === 'supports')
+      .map((evidence: any) => ({
+        claim_id: row.claim.id,
+        claim_evidence_id: evidence.id,
+        stance: 'supports',
+        independence_group: evidence.document_versions?.source_documents?.source_connectors?.independence_group
+          ?? evidence.document_versions?.source_documents?.domain
+          ?? evidence.document_version_id,
+      })));
+    const uniqueCitations = [...new Map(citations.map(citation => [`${citation.claim_id}:${citation.claim_evidence_id}`, citation])).values()];
+    const independenceGroups = new Set(uniqueCitations.map(citation => citation.independence_group));
+    const timestamps = rows.map(row => row.last_verified_at ?? row.updated_at).filter(Boolean).sort();
+    const windowStart = timestamps[0] ?? new Date().toISOString();
+    const windowEnd = new Date().toISOString();
+    const relationshipIds = rows.map(row => row.id).sort();
+    const inputFingerprint = fingerprint({ theme, relationshipIds, methodology: 'official-portfolio-concentration-v1' });
+    const publishable = uniqueCitations.length >= 3 && independenceGroups.size >= 2;
+    const humanTheme = theme.replaceAll('_', ' ');
+    const { data: stored, error: storeError } = await supabase.from('patterns').upsert({
+      name: `${humanTheme.replace(/\b\w/g, char => char.toUpperCase())} Portfolio Concentration`,
+      description: `${fundIds.size} tracked investors list ${companyIds.size} ${humanTheme} companies across their official portfolio pages.`,
+      time_window_start: windowStart,
+      time_window_end: windowEnd,
+      baseline_value: null,
+      current_value: rows.length,
+      change_percentage: null,
+      distinct_companies: companyIds.size,
+      distinct_funds: fundIds.size,
+      qualifying_events: rows.map(row => ({
+        relationship_id: row.id,
+        company_id: row.company_id,
+        company_name: row.companies?.canonical_name,
+        fund_id: row.fund_id,
+        fund_name: row.funds?.canonical_name,
+        source_url: row.source_url,
+        verification_status: row.verification_status,
+      })),
+      counterexamples: [],
+      confidence: independenceGroups.size >= 5 && companyIds.size >= 10 ? 'high' : independenceGroups.size >= 2 ? 'medium' : 'low',
+      coverage_notes: `Based on ${rows.length} source-linked portfolio relationships from ${fundIds.size} official investor sites. Portfolio presence does not imply investment date, round, check size, or current ownership.`,
+      status: publishable ? 'published' : 'candidate',
+      source_links: [...new Set(rows.map(row => row.source_url).filter(Boolean))].slice(0, 25),
+      pattern_type: 'portfolio_concentration',
+      filter_dimensions: { domains: [theme] },
+      baseline_window_start: null,
+      baseline_window_end: null,
+      sample_size: rows.length,
+      qualifying_claim_ids: uniqueCitations.map(citation => citation.claim_id),
+      independent_source_count: independenceGroups.size,
+      coverage_metrics: {
+        evidenced_relationships: uniqueCitations.length,
+        qualifying_relationships: rows.length,
+        verified_relationships: rows.filter(row => row.verification_status === 'verified').length,
+      },
+      sensitivity: { minimum_relationships: 3, minimum_companies: 3, minimum_funds: 2, minimum_independent_sources: 2 },
+      methodology_version: 'official-portfolio-concentration-v1',
+      input_fingerprint: inputFingerprint,
+      publication_reason: publishable
+        ? 'Published automatically from source-linked official portfolio relationships with cross-fund independence'
+        : 'Candidate only: portfolio evidence breadth or source independence threshold was not met',
+    }, { onConflict: 'input_fingerprint' }).select('id').single();
+    if (storeError) throw new Error(`Portfolio pattern write failed: ${storeError.message}`);
+    const { error: deleteError } = await supabase.from('pattern_citations').delete().eq('pattern_id', stored.id);
+    if (deleteError) throw new Error(`Portfolio pattern citation reset failed: ${deleteError.message}`);
+    if (uniqueCitations.length) {
+      const { error: citationError } = await supabase.from('pattern_citations').insert(uniqueCitations.map(citation => ({
+        pattern_id: stored.id,
+        claim_id: citation.claim_id,
+        claim_evidence_id: citation.claim_evidence_id,
+        stance: citation.stance,
+      })));
+      if (citationError) throw new Error(`Portfolio pattern citations failed: ${citationError.message}`);
+    }
+    written++;
+  }
+  return written;
+}
+
 export async function detectPatterns(): Promise<void> {
   const supabase = ingestionSupabase;
+
+  const ycPatternCount = await materializeYcPatterns();
+  const portfolioPatternCount = await materializePortfolioPatterns();
 
   // Get verified rounds from investment_graph
   const { data: events, error } = await supabase
@@ -361,8 +602,10 @@ export async function detectPatterns(): Promise<void> {
     .eq('participant_verification', 'verified')
     .order('announced_date', { ascending: false });
 
-  if (error || !events?.length) {
-    console.log('No verified events for pattern detection');
+  if (error) throw new Error(`Funding pattern input failed: ${error.message}`);
+  if (!events?.length) {
+    if (portfolioPatternCount + ycPatternCount === 0) throw new Error('PATTERN_INPUT_EMPTY: no evidence-backed funding, YC, or portfolio relationships are available');
+    console.log(`No verified funding events; published ${ycPatternCount} YC and ${portfolioPatternCount} portfolio patterns instead`);
     return;
   }
 

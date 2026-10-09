@@ -1,6 +1,8 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { feedFilterSchema } from '@/lib/validators/schemas';
+import { extractThesisThemes } from '@/lib/intelligence/answers/thesis-materializer';
+import { parseAnswerFilters } from '@/lib/intelligence/answers/filters';
 
 const read = (path: string) => readFileSync(resolve(__dirname, '..', path), 'utf8');
 
@@ -40,5 +42,47 @@ describe('research publication repair', () => {
     expect(patternDetector).toMatch(/claim_evidence!claim_evidence_claim_id_fkey/);
     expect(patternDetector).toMatch(/document_versions!claim_evidence_document_version_id_fkey/);
     expect(patternDetector).toMatch(/source_documents!document_versions_source_document_id_fkey/);
+  });
+
+  it('promotes source-linked legacy thesis excerpts into evidence-native claims before materialization', () => {
+    const materializer = read('src/lib/intelligence/answers/thesis-materializer.ts');
+    expect(materializer).toMatch(/ensureStatedThesisClaims/);
+    expect(materializer).toMatch(/content_kind: 'official_thesis_excerpt'/);
+    expect(materializer).toMatch(/claim_type: 'thesis_statement'/);
+    expect(materializer).toMatch(/predicate: 'stated_thesis'/);
+    expect(materializer).toMatch(/official-portfolio-themes-v1/);
+  });
+
+  it('extracts stable, human-meaningful thesis themes without model-generated labels', () => {
+    expect(extractThesisThemes('We invest across foundation models, infrastructure, and enterprise applications.'))
+      .toEqual(['foundation_models', 'infrastructure', 'applications', 'enterprise_ai']);
+    expect(extractThesisThemes('We back unusually ambitious AI-first founders.')).toEqual(['ai_first_companies']);
+  });
+
+  it('turns official portfolio synchronization into claim evidence for observed intelligence', () => {
+    const entitySync = read('src/lib/ingestion/entity-sync.ts');
+    expect(entitySync).toMatch(/content_kind: 'official_portfolio_index'/);
+    expect(entitySync).toMatch(/predicate: 'portfolio_company'/);
+    expect(entitySync).toMatch(/createClaimWithEvidence/);
+    expect(entitySync).toMatch(/claim\.publicationStatus !== 'published'/);
+    expect(entitySync).toMatch(/content_kind: 'official_yc_ai_company_index'/);
+    expect(entitySync).toMatch(/predicate: 'yc_membership'/);
+  });
+
+  it('publishes portfolio concentration patterns only with breadth and independent evidence', () => {
+    const patternDetector = read('src/lib/ingestion/pattern-detector.ts');
+    expect(patternDetector).toMatch(/official-portfolio-concentration-v1/);
+    expect(patternDetector).toMatch(/uniqueCitations\.length >= 3 && independenceGroups\.size >= 2/);
+    expect(patternDetector).toMatch(/PATTERN_INPUT_EMPTY/);
+    expect(patternDetector).toMatch(/pattern_type: 'portfolio_concentration'/);
+    expect(patternDetector).toMatch(/official-yc-batch-theme-concentration-v1/);
+    expect(patternDetector).toMatch(/pattern_type: 'yc_batch_theme_concentration'/);
+    expect(patternDetector).toMatch(/This is not a claim about funding volume or historical acceleration/);
+  });
+
+  it('uses the scheduled UTC day boundary for the default 90-day answer fingerprint', () => {
+    const filters = parseAnswerFilters(new URLSearchParams(), new Date('2026-10-09T17:42:18.123Z'));
+    expect(filters.periodEnd).toBe('2026-10-09T00:00:00.000Z');
+    expect(filters.periodStart).toBe('2026-07-11T00:00:00.000Z');
   });
 });

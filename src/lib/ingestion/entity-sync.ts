@@ -1,4 +1,9 @@
+import { randomUUID } from 'crypto';
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
+import { canonicalizeUrl } from '@/lib/intelligence/evidence/canonical-url';
+import { evidenceRepository } from '@/lib/intelligence/evidence/repository';
+import { normalizeText } from '@/lib/intelligence/evidence/normalization';
+import { createEvidenceItem, findExactSpan } from '@/lib/intelligence/evidence/spans';
 
 type FetchLike = typeof fetch;
 
@@ -176,14 +181,109 @@ export async function syncYcDirectory(fetchImpl: FetchLike = fetch): Promise<{ c
     if (error) throw new Error(`YC batch ${batch.id} upsert failed: ${error.message}`);
   }
   let stored = 0;
+  const storedHits: Array<{ companyId: string; hit: YcHit; batch: NonNullable<ReturnType<typeof normalizeYcBatch>>; tags: string[]; sourceUrl: string }> = [];
   for (const { hit, batch, tags } of aiHits) {
     const sourceUrl = `https://www.ycombinator.com/companies/${hit.slug ?? ''}`;
     const companyId = await findOrCreateCompany({ name: hit.name!, website: hit.website, sourceUrl, description: hit.one_liner, tags, country: mapCountry(hit.all_locations), batch: batch.id, verification: 'verified' });
     const { error } = await ingestionSupabase.from('yc_batch_companies').upsert({ batch_id: batch.id, company_id: companyId, is_ai_company: true }, { onConflict: 'batch_id,company_id' });
     if (error) throw new Error(`YC company link failed for ${hit.name}: ${error.message}`);
+    storedHits.push({ companyId, hit, batch, tags, sourceUrl });
     stored++;
   }
+  await persistYcEvidence(storedHits);
   return { companies: stored, batches: batchTotals.size };
+}
+
+async function persistYcEvidence(rows: Array<{ companyId: string; hit: YcHit; batch: NonNullable<ReturnType<typeof normalizeYcBatch>>; tags: string[]; sourceUrl: string }>): Promise<void> {
+  if (rows.length === 0) return;
+  const sourceId = 'yc-directory-evidence';
+  const { error: connectorError } = await ingestionSupabase.from('source_connectors').upsert({
+    source_id: sourceId,
+    name: 'Y Combinator company directory',
+    category: 'yc',
+    base_url: 'https://www.ycombinator.com/companies',
+    access_method: 'api',
+    auth_required: 'none',
+    robots_txt_allows: 'yes',
+    reuse_permission: 'summary_only',
+    attribution_required: true,
+    commercial_use_allowed: 'unclear',
+    expected_fact_types: ['yc_batch', 'company_profile', 'ai_topic'],
+    cadence: 'daily',
+    status: 'approved',
+    trust_tier: 'official',
+    is_official: true,
+    independence_group: 'ycombinator.com',
+  }, { onConflict: 'source_id' });
+  if (connectorError) throw new Error(`YC evidence connector failed: ${connectorError.message}`);
+  const { data: currentClaims, error: claimReadError } = await ingestionSupabase.from('claims')
+    .select('subject_id,value_json,publication_status')
+    .eq('subject_type', 'company').eq('claim_type', 'yc_batch').eq('predicate', 'yc_membership').limit(10000);
+  if (claimReadError) throw new Error(`YC evidence claim lookup failed: ${claimReadError.message}`);
+  const existing = new Set((currentClaims ?? []).map(claim => `${claim.subject_id}:${claim.value_json?.batch_id ?? ''}`));
+  const byBatch = new Map<string, typeof rows>();
+  for (const row of rows) byBatch.set(row.batch.id, [...(byBatch.get(row.batch.id) ?? []), row]);
+  for (const [batchId, batchRows] of byBatch) {
+    const evidenceRows = batchRows.map(row => ({
+      ...row,
+      evidenceLine: normalizeText(`${row.hit.name} | ${row.hit.one_liner ?? 'No description supplied'} | ${row.tags.join(', ')}`).normalizedText,
+    }));
+    const rawContent = evidenceRows.map(row => row.evidenceLine).join('\n');
+    const normalized = normalizeText(rawContent);
+    const batchUrl = canonicalizeUrl(`https://www.ycombinator.com/companies?batch=${batchId}`);
+    const persisted = await evidenceRepository.persistDocumentVersion({
+      source_id: sourceId,
+      canonical_url: batchUrl.canonicalUrl,
+      domain: batchUrl.domain,
+      title: `Y Combinator ${batchId} AI company index`,
+      publisher: 'Y Combinator',
+      raw_content: rawContent,
+      normalized_text: normalized.normalizedText,
+      normalization_version: 1,
+      fetched_at: new Date().toISOString(),
+      published_at: null,
+      r2_key: null,
+      r2_url: null,
+      rights_snapshot: { can_store_raw: true, can_store_full_text: false, extracted_index_only: true, attribution_required: true },
+      metadata: { content_kind: 'official_yc_ai_company_index', batch_id: batchId, company_count: evidenceRows.length },
+      archive_id: randomUUID(),
+    });
+    const run = await evidenceRepository.createModelRun({
+      run_kind: 'deterministic_extraction',
+      provider: 'yc-algolia',
+      prompt_version: null,
+      schema_version: 'yc-company-v1',
+      implementation_version: 'entity-sync-yc-evidence-v1',
+      input_checksum: normalized.checksum,
+      document_version_id: persisted.documentVersionId,
+    });
+    for (const row of evidenceRows) {
+      const dedupeKey = `${row.companyId}:${batchId}`;
+      if (existing.has(dedupeKey)) continue;
+      const span = findExactSpan(normalized.normalizedText, row.evidenceLine);
+      if (!span) throw new Error(`YC evidence span missing for ${row.hit.name}`);
+      const claim = await evidenceRepository.createClaimWithEvidence({
+        subject_type: 'company',
+        subject_id: row.companyId,
+        claim_type: 'yc_batch',
+        predicate: 'yc_membership',
+        value_json: {
+          batch_id: batchId,
+          company_name: row.hit.name,
+          description: row.hit.one_liner ?? null,
+          ai_topics: row.tags,
+          source_url: row.sourceUrl,
+        },
+        effective_at: null,
+        extraction_confidence: 0.99,
+        resolution_confidence: 1,
+        model_run_id: run.id,
+        evidence_items: [createEvidenceItem(persisted.documentVersionId, span, 'supports', 0.99)],
+      });
+      if (claim.publicationStatus !== 'published') throw new Error(`YC claim was not publishable for ${row.hit.name}: ${claim.publicationReason}`);
+      existing.add(dedupeKey);
+    }
+  }
 }
 
 export function extractPortfolioCandidates(data: { markdown?: string; links?: string[]; json?: { companies?: Array<{ name?: string; website?: string; profile_url?: string }> } }, sourceUrl: string): CompanyCandidate[] {
@@ -223,6 +323,60 @@ async function syncOneFund(fund: { id: string; canonical_name: string; canonical
   const payload = await response.json() as { success?: boolean; data?: { markdown?: string; links?: string[]; json?: { companies?: Array<{ name?: string; website?: string; profile_url?: string }> } } };
   if (!payload.success || !payload.data) throw new Error(`Firecrawl returned no portfolio data for ${fund.canonical_name}`);
   const candidates = extractPortfolioCandidates(payload.data, portfolioUrl);
+  const canonicalPortfolioUrl = canonicalizeUrl(portfolioUrl);
+  const sourceId = `official-portfolio-${fund.id}`;
+  const { error: connectorError } = await ingestionSupabase.from('source_connectors').upsert({
+    source_id: sourceId,
+    name: `${fund.canonical_name} official portfolio`,
+    category: 'vc_blog',
+    base_url: `https://${canonicalPortfolioUrl.domain}`,
+    access_method: 'html',
+    auth_required: 'none',
+    robots_txt_allows: 'conditional',
+    reuse_permission: 'summary_only',
+    attribution_required: true,
+    commercial_use_allowed: 'unclear',
+    expected_fact_types: ['portfolio_company'],
+    cadence: 'weekly',
+    status: 'approved',
+    trust_tier: 'official',
+    is_official: true,
+    independence_group: canonicalPortfolioUrl.domain,
+  }, { onConflict: 'source_id' });
+  if (connectorError) throw new Error(`Portfolio connector failed for ${fund.canonical_name}: ${connectorError.message}`);
+  const extractedIndex = candidates.map(candidate => candidate.name).join('\n');
+  const normalized = normalizeText(extractedIndex);
+  const persisted = candidates.length ? await evidenceRepository.persistDocumentVersion({
+    source_id: sourceId,
+    canonical_url: canonicalPortfolioUrl.canonicalUrl,
+    domain: canonicalPortfolioUrl.domain,
+    title: `${fund.canonical_name} official portfolio index`,
+    publisher: fund.canonical_name,
+    raw_content: extractedIndex,
+    normalized_text: normalized.normalizedText,
+    normalization_version: 1,
+    fetched_at: new Date().toISOString(),
+    published_at: null,
+    r2_key: null,
+    r2_url: null,
+    rights_snapshot: { can_store_raw: true, can_store_full_text: false, extracted_index_only: true, attribution_required: true },
+    metadata: { content_kind: 'official_portfolio_index', company_count: candidates.length, extraction_provider: 'firecrawl' },
+    archive_id: randomUUID(),
+  }) : null;
+  const modelRun = persisted ? await evidenceRepository.createModelRun({
+    run_kind: 'deterministic_extraction',
+    provider: 'firecrawl',
+    prompt_version: 'official-portfolio-companies-v1',
+    schema_version: 'portfolio-company-v1',
+    implementation_version: 'entity-sync-portfolio-evidence-v1',
+    input_checksum: normalized.checksum,
+    document_version_id: persisted.documentVersionId,
+  }) : null;
+  const { data: existingClaims, error: existingClaimsError } = await ingestionSupabase.from('claims')
+    .select('id,subject_id,predicate,value_json,publication_status')
+    .eq('subject_type', 'fund').eq('subject_id', fund.id).eq('claim_type', 'other').eq('predicate', 'portfolio_company').limit(5000);
+  if (existingClaimsError) throw new Error(`Portfolio claim lookup failed for ${fund.canonical_name}: ${existingClaimsError.message}`);
+  const claimedCompanies = new Set((existingClaims ?? []).map(claim => claim.value_json?.company_id).filter(Boolean));
   let stored = 0;
   for (const candidate of candidates) {
     const companyId = await findOrCreateCompany(candidate);
@@ -231,6 +385,32 @@ async function syncOneFund(fund: { id: string; canonical_name: string; canonical
       verification_status: candidate.verification, last_verified_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: 'fund_id,company_id' });
     if (error) throw new Error(`Portfolio link failed for ${fund.canonical_name}/${candidate.name}: ${error.message}`);
+    if (persisted && modelRun && !claimedCompanies.has(companyId)) {
+      const span = findExactSpan(normalized.normalizedText, candidate.name);
+      if (!span) throw new Error(`Portfolio evidence span missing for ${fund.canonical_name}/${candidate.name}`);
+      const claim = await evidenceRepository.createClaimWithEvidence({
+        subject_type: 'fund',
+        subject_id: fund.id,
+        claim_type: 'other',
+        predicate: 'portfolio_company',
+        value_json: {
+          company_id: companyId,
+          company_name: candidate.name,
+          source_url: candidate.sourceUrl,
+          portfolio_url: canonicalPortfolioUrl.canonicalUrl,
+          verification_status: candidate.verification,
+        },
+        effective_at: null,
+        extraction_confidence: candidate.verification === 'verified' ? 0.98 : 0.86,
+        resolution_confidence: 0.95,
+        model_run_id: modelRun.id,
+        evidence_items: [createEvidenceItem(persisted.documentVersionId, span, 'supports', candidate.verification === 'verified' ? 0.98 : 0.86)],
+      });
+      if (claim.publicationStatus !== 'published') {
+        throw new Error(`Portfolio claim was not publishable for ${fund.canonical_name}/${candidate.name}: ${claim.publicationReason}`);
+      }
+      claimedCompanies.add(companyId);
+    }
     stored++;
   }
   const hasVerifiedPortfolioEvidence = candidates.some(candidate => candidate.verification === 'verified');

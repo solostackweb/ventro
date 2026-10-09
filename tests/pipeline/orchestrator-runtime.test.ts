@@ -229,7 +229,7 @@ describe('hosted research publication contracts', () => {
   });
 
   it('disambiguates the direct claim-to-evidence relationship', () => {
-    expect(thesisMaterializer.match(/claim_evidence!claim_evidence_claim_id_fkey/g)).toHaveLength(2);
+    expect(thesisMaterializer.match(/claim_evidence!claim_evidence_claim_id_fkey/g)).toHaveLength(3);
   });
 
   it('gives a cold hosted refresh enough workflow headroom', () => {

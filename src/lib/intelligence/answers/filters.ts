@@ -40,7 +40,11 @@ export function normalizeAnswerFilters(input: unknown): AnswerFilters {
 }
 
 export function parseAnswerFilters(searchParams: URLSearchParams, now = new Date()): AnswerFilters {
-  const periodEnd = searchParams.get('period_end') ?? now.toISOString();
+  // Scheduled snapshots use a daily UTC boundary. Keeping the default request on
+  // the same boundary prevents a new filter fingerprint from being created on
+  // every page load while still allowing callers to request exact custom windows.
+  const dailyBoundary = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const periodEnd = searchParams.get('period_end') ?? dailyBoundary;
   const defaultStart = new Date(new Date(periodEnd).getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
   const split = (key: string) => (searchParams.get(key) ?? '').split(',').filter(Boolean);
   return normalizeAnswerFilters({

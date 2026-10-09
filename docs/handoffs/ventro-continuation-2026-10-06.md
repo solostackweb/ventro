@@ -2384,3 +2384,46 @@ Verification:
 - Exact hosted reproduction passed: `node --env-file=.env.local scripts/compute-answer-snapshots.mjs --period-start=2026-07-11T00:00:00Z --period-end=2026-10-09T00:00:00Z` completed and created both `investing_now` and `market_demand` snapshots.
 
 Required rollout: commit and push this relationship-hint repair, wait for the GitHub Actions revision to update, then continue with the VC `entity_sync` run (`source_scope=vc`, `max_stages=1`). The failed YC run does not need to be repeated solely because its trailing answer-refresh step failed; YC entity synchronization itself completed successfully.
+
+### Global thesis, pattern, and dashboard publication repair (2026-10-09)
+
+The individual investor pages contained source-linked rows in `stated_thesis`, but the global thesis page, pattern page, and dashboard read separate evidence-native publication tables. Hosted inspection proved the disconnect: `stated_thesis` had 5 rows while `thesis_records` and `patterns` had 0 rows. The default dashboard filter also used the current second, so its fingerprint could never match the snapshots computed by the scheduled UTC-day job.
+
+Implemented:
+
+- `src/lib/intelligence/answers/thesis-materializer.ts`
+  - Converts legacy official thesis excerpts into immutable document versions, deterministic model runs, published `thesis_statement` claims, exact evidence spans, and global `thesis_records`.
+  - Builds clearly labelled observed theses from evidence-backed official portfolio membership. The methodology explicitly states that portfolio presence does not prove investment date, round, check size, or current ownership.
+- `src/lib/ingestion/entity-sync.ts`
+  - VC portfolio synchronization now creates official-source `portfolio_company` claims with exact evidence.
+  - YC synchronization now creates official `yc_membership` claims per batch and fixed normalization before exact-span lookup.
+- `src/lib/ingestion/pattern-detector.ts`
+  - Materializes descriptive, evidence-backed YC batch theme-concentration patterns from recent completed batches.
+  - Excludes future batches, retires superseded trend artifacts, and fails explicitly when no evidence-backed pattern input exists instead of reporting false success.
+- `src/lib/intelligence/answers/filters.ts`
+  - Canonicalizes default answer windows to UTC midnight, matching scheduled snapshot fingerprints while preserving explicit custom timestamps.
+- Added regression coverage in `tests/research-publication-repair.test.ts` and updated the evidence relationship-count contract in `tests/pipeline/orchestrator-runtime.test.ts`.
+
+Hosted publication result:
+
+- 127 published `portfolio_company` evidence claims were created from the successful official VC portfolio imports. Forty Firecrawl sources were rate-limited and remain operational retry work.
+- YC synchronization completed with 317 processed, 317 succeeded, and 0 failed, producing official YC membership evidence.
+- Global thesis materialization produced 7 records: 5 stated and 2 observed.
+- Pattern materialization published 4 recent-YC concentration patterns over 216 AI companies: Robotics 38.4%, Applications 30.6%, Infrastructure 28.7%, and Research 18.5%.
+- Canonical 90-day answer snapshots were recomputed. `market_demand` is now published with 7 theses, 4 patterns, 6 funds, medium confidence, and material stated-demand, observed-demand, recurring-pattern, and thesis-change sections.
+- The dashboard answer lookup was verified end to end against the canonical default filters.
+
+Verification:
+
+- Focused suites: 2 suites, 22 tests passed.
+- Full Jest run: 46 suites and 406 tests passed; 1 Docker-only suite and 22 tests skipped.
+- Production build: passed, including TypeScript, all 34 static pages, and route generation. A sandboxed attempt hit OneDrive/cache permissions and blocked Google Fonts access; a clean permitted retry passed.
+- Earlier final-code checks also passed typecheck and lint with 0 lint errors (197 existing warnings).
+
+Remaining product gap:
+
+- `investing_now` remains intentionally empty. Hosted Supabase still has no verified `round_participants`, and some of the 21 candidate funding rounds are obvious false positives from non-funding OpenAI posts. These records must not be presented as investor activity.
+- The next engineering pass is to tighten funding-event classification, resolve company and fund participants with evidence, populate verified `round_participants`, reject or retire false-positive rounds, rerun `funding_extraction`, and recompute both answer snapshots.
+- Deploy the current code before judging the live UI: hosted data has been published, but the Vercel application needs this revision for the UTC filter match and future materialization behavior.
+
+Status: `THESIS_AND_PATTERN_PUBLICATION_LIVE — FUNDING/PARTICIPANT_REPAIR_NEXT`.
