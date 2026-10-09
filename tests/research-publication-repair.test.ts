@@ -2,7 +2,8 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { feedFilterSchema } from '@/lib/validators/schemas';
 import { extractThesisThemes } from '@/lib/intelligence/answers/thesis-materializer';
-import { parseAnswerFilters } from '@/lib/intelligence/answers/filters';
+import { fingerprint, parseAnswerFilters } from '@/lib/intelligence/answers/filters';
+import { buildDashboardAnswerQuery } from '@/lib/intelligence/answers/request-query';
 
 const read = (path: string) => readFileSync(resolve(__dirname, '..', path), 'utf8');
 
@@ -84,5 +85,14 @@ describe('research publication repair', () => {
     const filters = parseAnswerFilters(new URLSearchParams(), new Date('2026-10-09T17:42:18.123Z'));
     expect(filters.periodEnd).toBe('2026-10-09T00:00:00.000Z');
     expect(filters.periodStart).toBe('2026-07-11T00:00:00.000Z');
+  });
+
+  it('makes the dashboard request the same canonical window as scheduled snapshots', () => {
+    const now = new Date('2026-10-09T17:42:18.123Z');
+    const query = buildDashboardAnswerQuery({ period: '90', domain: '', geography: '', stage: '' }, now);
+    const filters = parseAnswerFilters(query, now);
+    expect(filters.periodEnd).toBe('2026-10-09T00:00:00.000Z');
+    expect(filters.periodStart).toBe('2026-07-11T00:00:00.000Z');
+    expect(fingerprint(filters)).toBe('55cb124e136a5f09602bf8a7e67cf84def4d5352cf0eca574e7506ba6f6df671');
   });
 });

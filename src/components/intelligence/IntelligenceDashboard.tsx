@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowRight, BookOpen, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Database, FileSearch, Filter, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, TrendingUp, X } from 'lucide-react';
 import type { AnswerCitation, AnswerSection, AnswerSnapshotRecord } from '@/lib/intelligence/answers/types';
+import { buildDashboardAnswerQuery } from '@/lib/intelligence/answers/request-query';
 
 interface AnswersPayload {
   access: 'preview' | 'full';
@@ -159,12 +160,7 @@ export function IntelligenceDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [citation, setCitation] = useState<AnswerCitation | null>(null);
   const filters = useMemo(() => ({ period: searchParams.get('period') || '90', domain: searchParams.get('domain') || '', geography: searchParams.get('geography') || '', stage: searchParams.get('stage') || '' }), [searchParams]);
-  const requestQuery = useMemo(() => {
-    const end = new Date(); const start = new Date(end.getTime() - Number(filters.period) * 86400000);
-    const query = new URLSearchParams({ period_start: start.toISOString(), period_end: end.toISOString(), kind: 'both' });
-    if (filters.domain) query.set('domains', filters.domain); if (filters.geography) query.set('geographies', filters.geography); if (filters.stage) query.set('stages', filters.stage);
-    return query;
-  }, [filters]);
+  const requestQuery = useMemo(() => buildDashboardAnswerQuery(filters), [filters]);
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try { const response = await fetch(`/api/intelligence/answers?${requestQuery.toString()}`); if (!response.ok) throw new Error('Ventro could not load this intelligence slice.'); setPayload(await response.json() as AnswersPayload); }

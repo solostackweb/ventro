@@ -2427,3 +2427,33 @@ Remaining product gap:
 - Deploy the current code before judging the live UI: hosted data has been published, but the Vercel application needs this revision for the UTC filter match and future materialization behavior.
 
 Status: `THESIS_AND_PATTERN_PUBLICATION_LIVE — FUNDING/PARTICIPANT_REPAIR_NEXT`.
+
+### Deployed dashboard snapshot-fingerprint repair (2026-10-09)
+
+After the thesis/pattern publication revision was pushed, the live dashboard still showed both answer panels as empty. Hosted data inspection proved that this was not a missing-data problem:
+
+- Published `market_demand` snapshot `cd265e95-7737-4e16-8896-1c54e88e5557` exists for `2026-07-11T00:00:00Z` through `2026-10-09T00:00:00Z` with 7 theses and 4 patterns.
+- Its canonical filter fingerprint is `55cb124e136a5f09602bf8a7e67cf84def4d5352cf0eca574e7506ba6f6df671`.
+- The deployed dashboard generated `period_start` and `period_end` from the browser's current second. At reproduction time that produced fingerprint `a48c02ae6bd70605448940c757be16b761da38a44291b39ccce95706b4f3ddc8`, which cannot match any scheduled snapshot.
+- The earlier server-side default-boundary repair did not apply because `IntelligenceDashboard` always supplied explicit timestamps.
+
+Implemented:
+
+- Added the client-safe `src/lib/intelligence/answers/request-query.ts` query builder.
+- Dashboard answer requests now use UTC midnight and an exact supported period length, matching scheduled snapshot generation.
+- Invalid URL period values fall back to 90 days.
+- Added a behavioral regression test proving that the dashboard's canonical 90-day request produces the exact hosted fingerprint `55cb...`.
+- Updated the older Checkpoint 4 source-contract test to follow the extracted query builder.
+
+Verification:
+
+- Hosted Supabase read-only reproduction confirmed the mismatched deployed fingerprint and the material published snapshot.
+- Focused tests: 2 suites, 20 tests passed.
+- Full Jest run: 46 suites and 407 tests passed; 1 Docker-only suite and 22 tests skipped.
+- Typecheck passed.
+- Lint passed with 0 errors and 197 existing warnings.
+- Production build passed and generated all 34 static pages.
+
+Required rollout: commit and push this small dashboard-query repair, wait for the Vercel deployment, then hard-refresh `/dashboard?period=90`. No migration, ingestion rerun, thesis rerun, pattern rerun, or answer recomputation is required. The market-demand panel should resolve the existing published snapshot; the investing-now panel remains honestly empty until verified funding participants are repaired.
+
+Status: `FIXED_AND_VERIFIED — DEPLOYMENT_REQUIRED`.

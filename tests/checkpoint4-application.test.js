@@ -15,6 +15,7 @@ describe('Checkpoint 4 evidence-first application contracts', () => {
   const citationRoute = read('src/app/api/intelligence/citations/[id]/route.ts');
   const accountDelete = read('src/app/api/account/delete/route.ts');
   const answerRepository = read('src/lib/intelligence/answers/repository.ts');
+  const answerRequestQuery = read('src/lib/intelligence/answers/request-query.ts');
 
   test('the two product questions dominate the dashboard', () => {
     expect(dashboard).toContain('What are investors investing in now?');
@@ -24,7 +25,8 @@ describe('Checkpoint 4 evidence-first application contracts', () => {
   test('dashboard reads the Checkpoint 3 answer API and preserves filters in the URL', () => {
     expect(dashboard).toContain('/api/intelligence/answers?');
     expect(dashboard).toContain('router.replace(`${pathname}?${query.toString()}`');
-    expect(dashboard).toContain("query.set('domains', filters.domain)");
+    expect(dashboard).toContain('buildDashboardAnswerQuery(filters)');
+    expect(answerRequestQuery).toContain("query.set('domains', filters.domain)");
   });
 
   test('disclosed and undisclosed investment semantics are explicit', () => {
