@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { BarChart3, Bell, Bookmark, BriefcaseBusiness, Building2, GraduationCap, Home, Menu, MessageSquare, Newspaper, Search, Settings, SlidersHorizontal, Users, X } from 'lucide-react';
+import { BarChart3, Bell, Bookmark, BriefcaseBusiness, Building2, FileText, GraduationCap, Home, Menu, MessageSquare, Newspaper, Search, Settings, SlidersHorizontal, Users, X } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { cn } from '@/lib/utils/helpers';
 import { Button } from '@/components/ui/Button';
@@ -19,6 +19,7 @@ const PRIMARY_ITEMS = [
 
 const WORKSPACE_ITEMS = [
   { href: '/companies', label: 'Companies', icon: Building2 },
+  { href: '/reports', label: 'Reports', icon: FileText },
   { href: '/saved', label: 'Saved research', icon: Bookmark },
   { href: '/alerts', label: 'Alerts', icon: Bell },
   { href: '/community', label: 'Community', icon: MessageSquare },

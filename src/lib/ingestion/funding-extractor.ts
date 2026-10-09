@@ -42,9 +42,14 @@ function escapeRegExp(value: string): string {
 }
 
 export function inferFundedCompanyName(headline: string): string | null {
-  const title = headline.trim().replace(/\s*[|–—-]\s*[^|–—]+$/, '').trim();
+  const title = headline.trim()
+    .replace(/^Exclusive:\s*/i, '')
+    .replace(/\s*[|–—-]\s*[^|–—]+$/, '')
+    .trim();
   const partnering = title.match(/^Partnering with\s+([^:]{2,100})(?::|$)/i);
   if (partnering) return partnering[1].trim();
+  const introducing = title.match(/^Introducing\s+([^:]{2,100})(?::|$)/i);
+  if (introducing) return introducing[1].trim();
   const raise = title.match(/^(.{2,100}?)\s+(?:raises?|raised|secures?|secured|closes?|closed|lands?|landed)\s+(?:an?\s+)?(?:\$|USD|€|£|\d)/i);
   if (!raise) return null;
   const name = raise[1].replace(/^(AI startup|Startup|Company)\s+/i, '').trim();
@@ -53,9 +58,22 @@ export function inferFundedCompanyName(headline: string): string | null {
 
 export function classifyKnownInvestorRole(text: string, fundName: string): 'lead' | 'participant' | null {
   const escaped = escapeRegExp(fundName);
-  if (new RegExp(`(?:led|co-led)\\s+by[^.!?]{0,180}\\b${escaped}\\b|\\b${escaped}\\b[^.!?]{0,100}(?:led|co-led)\\s+(?:the\\s+)?(?:round|financing)`, 'i').test(text)) return 'lead';
+  if (new RegExp(`(?:led|co-led)\\s+by[^.!?]{0,180}\\b${escaped}\\b|\\b${escaped}\\b[^.!?]{0,100}(?:led|co-led|co-leads?)\\s+(?:the\\s+)?(?:round|financing|[A-Z][\\w'-]+)`, 'i').test(text)) return 'lead';
   if (new RegExp(`(?:participation\\s+from|joined\\s+by|backed\\s+by|investors?\\s+(?:include|included))[^.!?]{0,220}\\b${escaped}\\b`, 'i').test(text)) return 'participant';
   return null;
+}
+
+export function hasExplicitFundingSignal(headline: string, summary: string, officialInvestorSource = false): boolean {
+  const text = `${headline} ${summary}`;
+  if (/\b(?:raises?|raised|secures?|secured|closes?|closed|lands?|landed)\b[^.!?]{0,80}(?:\$|USD|€|£|\d+(?:\.\d+)?\s*(?:million|billion|[MB]))/i.test(text)) return true;
+  if (/\b(?:seed|series\s+[A-E]|growth)\s+(?:round|funding|financing)\b/i.test(text) && /\b(?:led|co-led|co-leads?|participation|invest)/i.test(text)) return true;
+  if (officialInvestorSource && /^Partnering with\s+/i.test(headline.trim())) return true;
+  if (officialInvestorSource && /^Introducing\s+[^:]+:/i.test(headline.trim()) && /\b(?:led|co-led|co-leads?|invests|invested|investment|backs|backed|partnering\s+with|partnered\s+with)\b/i.test(text)) return true;
+  return false;
+}
+
+function normalizedOrganizationName(value: string): string {
+  return value.toLowerCase().replace(/\bblog\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 function normalizeStage(stage: string): string {
@@ -108,6 +126,13 @@ interface DocumentSpan {
   spans: EvidenceSpan[];
 }
 
+interface FundingSourceConnector {
+  source_id: string;
+  name: string;
+  category: string;
+  is_official: boolean | null;
+}
+
 function findSpansInText(
   normalizedText: string,
   searchTerms: string[],
@@ -149,6 +174,7 @@ interface FundingEvent {
   amount_currency: string;
   lead_investors: string[];
   participant_investors: string[];
+  investor_evidence_terms: Record<string, string[]>;
   source_urls: string[];
   document_versions: Array<{ id: string; normalized_text: string }>;
   verification_status: 'verified' | 'partial' | 'unverified' | 'conflicted';
@@ -213,6 +239,11 @@ export async function extractFundingEvidence(): Promise<void> {
   const { data: funds } = await supabase
     .from('funds')
     .select('id, canonical_name');
+  const { data: connectors } = await supabase
+    .from('source_connectors')
+    .select('source_id, name, category, is_official')
+    .eq('status', 'approved');
+  const connectorsById = new Map((connectors || []).map((connector: FundingSourceConnector) => [connector.source_id, connector]));
   // Fetch known companies for matching
   const { data: companies } = await supabase
     .from('companies')
@@ -235,6 +266,7 @@ export async function extractFundingEvidence(): Promise<void> {
       event_date,
       publisher,
       source_urls,
+      supporting_sources,
       ai_topics,
       geography,
       verification_label,
@@ -242,10 +274,9 @@ export async function extractFundingEvidence(): Promise<void> {
       story_companies (company_id, companies!inner (canonical_name)),
       story_investors (fund_id, role, funds!inner (canonical_name))
     `)
-    .eq('event_type', 'funding')
     .in('verification_label', ['verified', 'partial'])
     .order('event_date', { ascending: false })
-    .limit(200);
+    .limit(1000);
 
   if (!stories?.length) {
     console.log('No funding stories found');
@@ -255,6 +286,14 @@ export async function extractFundingEvidence(): Promise<void> {
   const extractedEvents: FundingEvent[] = [];
 
   for (const story of stories) {
+    const storyConnectors = ((story.supporting_sources || []) as string[])
+      .map((sourceId: string) => connectorsById.get(sourceId))
+      .filter((connector: FundingSourceConnector | undefined): connector is FundingSourceConnector => Boolean(connector));
+    const officialInvestorConnector = storyConnectors.find((connector: FundingSourceConnector) =>
+      connector?.is_official === true && ['vc_blog', 'corporate'].includes(connector.category)
+    );
+    if (!hasExplicitFundingSignal(story.headline || '', story.summary || '', Boolean(officialInvestorConnector))) continue;
+
     // Collect document versions from story sources
     const storySources = story.story_sources || [];
     const documentVersions = storySources
@@ -323,11 +362,27 @@ export async function extractFundingEvidence(): Promise<void> {
       .map((si: { funds?: { canonical_name: string } | { canonical_name: string }[] | null }) => relatedName(si.funds)).filter(Boolean) as string[];
 
     const fullText = docVersions.map(dv => dv.normalized_text).join('\n');
+    const investorEvidenceTerms = new Map<string, string[]>();
     for (const fund of funds ?? []) {
       if (leadInvestors.includes(fund.canonical_name) || participantInvestors.includes(fund.canonical_name)) continue;
       const role = classifyKnownInvestorRole(fullText, fund.canonical_name);
-      if (role === 'lead') leadInvestors.push(fund.canonical_name);
-      if (role === 'participant') participantInvestors.push(fund.canonical_name);
+      if (role === 'lead') {
+        leadInvestors.push(fund.canonical_name);
+        investorEvidenceTerms.set(fund.canonical_name, [fund.canonical_name]);
+      }
+      if (role === 'participant') {
+        participantInvestors.push(fund.canonical_name);
+        investorEvidenceTerms.set(fund.canonical_name, [fund.canonical_name]);
+      }
+    }
+    if (officialInvestorConnector && inferredCompanyName) {
+      const connectorName = normalizedOrganizationName(officialInvestorConnector.name);
+      const sourceFund = (funds || []).find(fund => normalizedOrganizationName(fund.canonical_name) === connectorName);
+      if (sourceFund && !leadInvestors.includes(sourceFund.canonical_name) && !participantInvestors.includes(sourceFund.canonical_name)) {
+        const role = /\bco-leads?\b/i.test(`${story.headline} ${story.summary}`) ? 'lead' : 'participant';
+        (role === 'lead' ? leadInvestors : participantInvestors).push(sourceFund.canonical_name);
+        investorEvidenceTerms.set(sourceFund.canonical_name, [story.headline, `Partnering with ${inferredCompanyName}`, inferredCompanyName]);
+      }
     }
 
     const parsedAmounts = docVersions
@@ -349,6 +404,7 @@ export async function extractFundingEvidence(): Promise<void> {
       amount_currency: 'USD',
       lead_investors: leadInvestors,
       participant_investors: participantInvestors,
+      investor_evidence_terms: Object.fromEntries(investorEvidenceTerms),
       source_urls: allUrls,
       document_versions: docVersions.map(dv => ({ id: dv.id, normalized_text: dv.normalized_text })),
       verification_status: story.verification_label === 'verified' ? 'verified' : 'partial',
@@ -462,7 +518,7 @@ export async function extractFundingEvidence(): Promise<void> {
         }> = [];
 
         for (const dv of event.document_versions) {
-          const spans = findSpansInText(dv.normalized_text, [investorName], 0.85);
+          const spans = findSpansInText(dv.normalized_text, event.investor_evidence_terms[investorName] ?? [investorName], 0.85);
           for (const span of spans) {
             evidenceItems.push({
               document_version_id: dv.id,

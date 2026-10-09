@@ -23,10 +23,10 @@ function intersects(values: string[], filters: string[]): boolean {
   return filters.length === 0 || values.some(value => filters.includes(value.toLowerCase()));
 }
 
-function eligibleEvent(event: InvestmentEvent, filters: AnswerFilters): boolean {
+export function isEligibleInvestmentEvent(event: InvestmentEvent, filters: AnswerFilters): boolean {
   const participants = event.participants.filter(participant => participant.verificationStatus === 'verified' && participant.citations.length > 0);
   return event.verificationStatus === 'verified' &&
-    event.citations.length > 0 &&
+    (event.citations.length > 0 || participants.some(participant => participant.citations.length > 0)) &&
     participants.length > 0 &&
     (filters.domains.length === 0 || intersects(event.domains.map(value => value.toLowerCase()), filters.domains)) &&
     (filters.geographies.length === 0 || (event.geography ? filters.geographies.includes(event.geography.toLowerCase()) : false)) &&
@@ -122,7 +122,7 @@ function baseFingerprint(kind: string, filters: AnswerFilters, bundle: AnswerInp
 
 export function buildInvestingNowDraft(filters: AnswerFilters, bundle: AnswerInputBundle, now = new Date()): AnswerSnapshotDraft {
   const previousWindow = equalPreviousWindow(filters);
-  const eligible = bundle.investments.filter(event => eligibleEvent(event, filters));
+  const eligible = bundle.investments.filter(event => isEligibleInvestmentEvent(event, filters));
   const current = eligible.filter(event => inRange(event.announcedDate, filters.periodStart, filters.periodEnd));
   const previous = eligible.filter(event => inRange(event.announcedDate, previousWindow.start, previousWindow.end));
   const disclosed = current.filter(event => event.amountUsd !== null);
@@ -135,7 +135,7 @@ export function buildInvestingNowDraft(filters: AnswerFilters, bundle: AnswerInp
   const topRounds = [...current]
     .sort((a, b) => (b.amountUsd ?? -1) - (a.amountUsd ?? -1) || b.announcedDate.localeCompare(a.announcedDate))
     .slice(0, 8);
-  const evidenceCoverage = current.length ? current.filter(event => event.citations.length > 0).length / current.length : 0;
+  const evidenceCoverage = current.length ? current.filter(event => eventCitations(event).length > 0).length / current.length : 0;
   const sourceCoverage = bundle.expectedSourceCount
     ? Math.min(1, (bundle.observedSourceCount ?? 0) / bundle.expectedSourceCount)
     : averageCoverage(current);

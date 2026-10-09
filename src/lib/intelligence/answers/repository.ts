@@ -33,6 +33,23 @@ function evidenceCitations(binding: Row): AnswerCitation[] {
   }));
 }
 
+function mapUniqueParticipants(rows: Row[], citationsByRecord: Map<string, AnswerCitation[]>): InvestmentEvent['participants'] {
+  const byFund = new Map<string, InvestmentEvent['participants'][number]>();
+  for (const participant of rows) {
+    const mapped = {
+      participantId: participant.id,
+      fundId: participant.fund_id,
+      fundName: participant.funds?.canonical_name ?? 'Unknown investor',
+      role: participant.role,
+      verificationStatus: participant.verification_status,
+      citations: citationsByRecord.get(participant.id) ?? [],
+    };
+    const existing = byFund.get(mapped.fundId);
+    if (!existing || (existing.citations.length === 0 && mapped.citations.length > 0)) byFund.set(mapped.fundId, mapped);
+  }
+  return [...byFund.values()];
+}
+
 function mapSnapshot(row: Row): AnswerSnapshotRecord {
   const sections = asArray<Row>(row.answer_snapshot_sections)
     .sort((a, b) => a.position - b.position)
@@ -181,14 +198,7 @@ export async function loadAnswerInputBundle(filters: AnswerFilters): Promise<Ans
       verificationStatus: round.verification_status,
       sourceCoverage: Math.min(1, asArray<string>(round.source_urls).length / 2),
       citations: citationsByRecord.get(round.id) ?? [],
-      participants: asArray<Row>(round.round_participants).map(participant => ({
-        participantId: participant.id,
-        fundId: participant.fund_id,
-        fundName: participant.funds?.canonical_name ?? 'Unknown investor',
-        role: participant.role,
-        verificationStatus: participant.verification_status,
-        citations: citationsByRecord.get(participant.id) ?? [],
-      })),
+      participants: mapUniqueParticipants(asArray<Row>(round.round_participants), citationsByRecord),
     };
   });
 

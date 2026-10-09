@@ -11,14 +11,15 @@ describe('investing-now aggregation', () => {
     expect(draft.caveats.join(' ')).toMatch(/undisclosed/i);
   });
 
-  it('excludes unverified, uncited, and participant-unverified events', () => {
+  it('accepts participant evidence while excluding unverified and fully uncited events', () => {
     const draft = buildInvestingNowDraft(filters, bundle({ investments: [
       investment({ roundId: '1' }),
       investment({ roundId: '2', verificationStatus: 'partial' }),
       investment({ roundId: '3', citations: [] }),
       investment({ roundId: '4', participants: [{ ...investment().participants[0], verificationStatus: 'partial' }] }),
+      investment({ roundId: '5', citations: [], participants: [{ ...investment().participants[0], citations: [] }] }),
     ] }));
-    expect(draft.counts.roundCount).toBe(1);
+    expect(draft.counts.roundCount).toBe(2);
   });
 
   it('applies domain, geography, stage, YC, and fund filters together', () => {

@@ -2499,3 +2499,53 @@ Verification:
 Required rollout: commit and push the code changes, wait for Vercel, then hard-refresh the dashboard. The hosted v2 snapshot is already published, so no migration or workflow rerun is needed. The market-demand card and evidence sources will work after deployment. The separate investing-now answer remains empty until verified funding participants are repaired.
 
 Status: `ANSWER_AND_HOSTED_DATA_FIXED — UI DEPLOYMENT_REQUIRED`.
+
+### Verified investing-now answer + personalized DOCX reports (2026-10-09)
+
+The dashboard's second question was already repaired. This pass completed the first question and added the initial production vertical slice for user-personalized reports.
+
+Investing-now repair:
+
+- Tightened funding classification so generic benchmark, product, and regulatory posts no longer materialize as funding merely because they contain broad financial vocabulary.
+- Added explicit recognition for concrete raises/financing and official VC partnership or introduction posts.
+- Maps an approved official VC connector to the canonical fund and records that fund as an evidence-backed participant.
+- Supports participant evidence as the qualifying citation when a separate round-field citation is absent.
+- Deduplicates multiple nullable-vehicle participant rows by fund at the answer repository boundary so dashboard fund counts remain accurate.
+- Hosted false-positive `Financial Audit Bench` investment rows were marked unverified and excluded.
+- Recomputed the canonical 90-day hosted snapshots. The investing answer now reports 3 verified rounds across Parallax, Antioch, and Etched with Greylock and Sequoia participation. The exact same snapshot IDs were updated idempotently.
+
+Personalized report generator:
+
+- New authenticated `/reports` workspace and sidebar item.
+- Users configure a title, 3–15 target pages, 30/90/180/365-day evidence window, geographies, AI topics, selected VC firms, selected YC batches, audience, purpose, and report sections.
+- The server assembles only publication-eligible funding, thesis, YC, pattern, and source data. Official statements and behavioral inferences remain separately labelled; undisclosed funding is never treated as zero.
+- Optional OpenAI Responses API editing uses `OPENAI_API_KEY` and `OPENAI_REPORT_MODEL` (default `gpt-5-mini`). It is constrained to rewrite supplied evidence only. A deterministic evidence template is used when no key is configured or the provider fails.
+- Generates a styled `.docx` with scope table, executive summary, capital flow, thesis analysis, YC signals, patterns, selected-investor profiles, interpretation prompts, caveats, clickable source register, page numbers, and a prominent edit-before-sharing reminder.
+- Uploads each private Word file to Cloudflare R2 under `personalized-reports/<user>/<report>/<file>`, then provides a five-minute signed download URL.
+- Persists report configuration, status, source manifest, generated content, provider/model, file metadata, and failure details in Supabase. RLS restricts all report rows to their owner. Generation is bounded to two active reports and eight reports per rolling day.
+- Report artifact/status updates are service-role-only after authentication; browser clients can create and read their own rows but cannot forge a ready status or R2 object key.
+- Added the `docx` runtime dependency, report schema/DOCX tests, and a reusable preview generator.
+
+Hosted database:
+
+- Applied `20261009020000_personalized_reports.sql` and `20261009030000_personalized_report_write_hardening.sql` to the linked Supabase project.
+- `npx supabase migration list --linked` shows local and remote migrations synchronized through `20261009030000`.
+- `npx supabase db lint --linked` reports no schema errors.
+
+Verification:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 0 errors and 199 existing warnings.
+- Full serial Jest run: 47 suites passed, 413 tests passed; 1 Docker-only suite and 22 tests skipped.
+- `npm run build`: passed and generated all 35 application pages, including `/reports` and its two API routes. The first build attempt hit a Windows/OneDrive lock in generated `.next`; deleting only that generated cache and rerunning succeeded.
+- `git diff --check`: passed (line-ending notices only).
+- Generated DOCX package test passed and the sample opens as a valid Office ZIP package. Visual PNG rendering could not run because LibreOffice `soffice.exe` is unavailable on this Windows host; the production generator is covered structurally, but final visual inspection should be done once in Word after deployment.
+
+Required rollout:
+
+1. Commit and push this revision, then wait for Vercel to deploy it. The Supabase migration is already live.
+2. Confirm the Vercel project has the existing R2 variables. Add `OPENAI_API_KEY` for AI-edited prose; without it, reports still generate using the deterministic evidence template. `OPENAI_REPORT_MODEL` is optional.
+3. Open `/reports`, generate a short 3-page report first, download it, and inspect it in Word. Then test a filtered VC/YC report and a longer report.
+4. Hard-refresh `/dashboard?period=90`; the investing-now card should now show the verified three-round answer after this code revision deploys.
+
+Status: `IMPLEMENTED_AND_HOSTED_SCHEMA_LIVE — CODE_DEPLOYMENT_AND_ONE_WORD_VISUAL_CHECK_REQUIRED`.

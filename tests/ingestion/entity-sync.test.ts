@@ -1,5 +1,5 @@
 import { classifyYcAiTags, extractPortfolioCandidates, normalizeYcBatch, parseYcAlgoliaConfig } from '@/lib/ingestion/entity-sync';
-import { classifyKnownInvestorRole, inferFundedCompanyName } from '@/lib/ingestion/funding-extractor';
+import { classifyKnownInvestorRole, hasExplicitFundingSignal, inferFundedCompanyName } from '@/lib/ingestion/funding-extractor';
 
 describe('structured entity synchronization', () => {
   test('parses YC public directory configuration without hardcoding credentials', () => {
@@ -35,6 +35,8 @@ describe('funding extraction discovery', () => {
   test.each([
     ['Acme AI raises $20M Series A', 'Acme AI'],
     ['Partnering with Corma: Closing the Cybersecurity Gap', 'Corma'],
+    ['Introducing Parallax: The AI Energy Company', 'Parallax'],
+    ['Exclusive: Gudea Lands $7M To Predict Narratives', 'Gudea'],
   ])('infers the funded company from %s', (headline, expected) => {
     expect(inferFundedCompanyName(headline)).toBe(expected);
   });
@@ -42,6 +44,16 @@ describe('funding extraction discovery', () => {
   test('requires explicit investor-role language', () => {
     expect(classifyKnownInvestorRole('The $20M round was led by Sequoia Capital.', 'Sequoia Capital')).toBe('lead');
     expect(classifyKnownInvestorRole('with participation from Accel and others.', 'Accel')).toBe('participant');
+    expect(classifyKnownInvestorRole("Greylock co-leads Parallax's Series A.", 'Greylock')).toBe('lead');
     expect(classifyKnownInvestorRole('The founder previously worked with Accel.', 'Accel')).toBeNull();
+  });
+
+  test('requires a concrete financing event instead of broad capital vocabulary', () => {
+    expect(hasExplicitFundingSignal('AI investors are raising the bar', 'A market commentary')).toBe(false);
+    expect(hasExplicitFundingSignal('Acme raises $20M', 'Series A financing')).toBe(true);
+    expect(hasExplicitFundingSignal('Partnering with Corma: Security', 'Official portfolio announcement', true)).toBe(true);
+    expect(hasExplicitFundingSignal('Partnering with CodeAI', 'Education partnership', false)).toBe(false);
+    expect(hasExplicitFundingSignal('Introducing Financial Audit Bench: Evaluation', 'A research benchmark', true)).toBe(false);
+    expect(hasExplicitFundingSignal('Introducing Parallax: Energy', 'Greylock co-leads its Series A', true)).toBe(true);
   });
 });

@@ -58,10 +58,10 @@ function fixture(investorRole) {
   const funds = [{ id: 'fund-1', canonical_name: 'Northstar Ventures' }];
   const companies = [{ id: 'company-1', canonical_name: 'Acme AI', canonical_domain: 'acme.test' }];
   const stories = [{
-    id: 'story-1', headline: 'Acme AI raises a Series A',
+    id: 'story-1', headline: 'Acme AI raises $20M Series A',
     summary: 'Northstar Ventures was an earlier backer, not in this round.',
     event_date: '2026-10-01T00:00:00Z', verification_label: 'partial',
-    source_urls: ['https://publisher.example/acme-round'], 
+    source_urls: ['https://publisher.example/acme-round'], supporting_sources: ['publisher'],
     story_sources: [{
       source_url: 'https://publisher.example/acme-round',
       document_version_id: 'doc-version-1',
@@ -73,7 +73,7 @@ function fixture(investorRole) {
   
   const docVersions = [{
     id: 'doc-version-1',
-    normalized_text: 'Acme AI raises a Series A\n\n---\n\nNorthstar Ventures was an earlier backer, not in this round.',
+    normalized_text: 'Acme AI raises $20M Series A\n\n---\n\nNorthstar Ventures was an earlier backer, not in this round.',
     source_document_id: 'source-doc-1',
   }];
   
@@ -109,6 +109,7 @@ function fixture(investorRole) {
     from: (table) => {
       if (table === 'funds') return createQueryBuilder(funds);
       if (table === 'companies') return createQueryBuilder(companies);
+      if (table === 'source_connectors') return createQueryBuilder([]);
       if (table === 'stories') return createQueryBuilder(stories);
       if (table === 'document_versions') return createQueryBuilder(docVersions);
       if (table === 'funding_rounds') {
