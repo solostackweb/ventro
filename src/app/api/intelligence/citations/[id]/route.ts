@@ -17,17 +17,20 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const { data, error } = await ingestionSupabase.from('answer_snapshot_citations').select(`
       id, stance, label, claim_id, claim_binding_id, claim_evidence_id,
       funding_round_id, round_participant_id, thesis_record_id, pattern_id,
-      answer_snapshots!inner(id, answer_kind, status, period_start, period_end),
-      claim_evidence(
+      answer_snapshots!answer_snapshot_citations_snapshot_id_fkey(id, answer_kind, status, period_start, period_end),
+      claim_evidence!answer_snapshot_citations_claim_evidence_id_fkey(
         id, stance, excerpt, span_start, span_end,
-        document_versions(id, published_at, fetched_at, rights_snapshot, source_documents(canonical_url, publisher))
+        document_versions!claim_evidence_document_version_id_fkey(
+          id, published_at, fetched_at, rights_snapshot,
+          source_documents!document_versions_source_document_id_fkey(canonical_url, publisher)
+        )
       )
     `).eq('id', id).in('answer_snapshots.status', ['published', 'stale', 'superseded']).maybeSingle();
     if (error) throw error;
     if (!data) return createErrorResponse('Citation not found', 404, 'NOT_FOUND');
     const evidence = data.claim_evidence as Record<string, any> | null;
     const rights = evidence?.document_versions?.rights_snapshot ?? {};
-    const canShowExcerpt = rights.can_store_full_text !== false;
+    const canShowExcerpt = rights.excerpt_only === true || rights.can_store_full_text !== false;
     const excerptLimit = fullAccess ? 800 : 280;
     return createSuccessResponse({
       citation: {

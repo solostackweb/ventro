@@ -106,15 +106,18 @@ function EvidenceDrawer({ citation, onClose }: { citation: AnswerCitation; onClo
 
 function SourceStack({ citations, onOpen }: { citations: AnswerCitation[]; onOpen: (citation: AnswerCitation) => void }) {
   if (!citations.length) return <span className="text-xs text-amber-700">Evidence coverage is still sparse</span>;
+  const visible = citations.filter((citation, index, all) =>
+    all.findIndex(candidate => (candidate.label || candidate.id) === (citation.label || citation.id)) === index,
+  );
   return <div className="flex flex-wrap items-center gap-2" aria-label={`${citations.length} supporting citations`}>
-    {citations.slice(0, 4).map((citation, index) => <button key={citation.id || `${citation.label}-${index}`} onClick={() => onOpen(citation)} className="citation-chip"><FileSearch className="h-3.5 w-3.5" /> {citation.label || `Source ${index + 1}`}</button>)}
-    {citations.length > 4 && <span className="text-xs font-semibold text-ink-500">+{citations.length - 4}</span>}
+    {visible.slice(0, 4).map((citation, index) => <button key={citation.id || `${citation.label}-${index}`} onClick={() => onOpen(citation)} className="citation-chip"><FileSearch className="h-3.5 w-3.5" /> {citation.label || `Evidence ${index + 1}`}</button>)}
+    {visible.length > 4 && <span className="text-xs font-semibold text-ink-500">+{visible.length - 4}</span>}
   </div>;
 }
 
 function Confidence({ answer }: { answer: AnswerSnapshotRecord }) {
-  const coverage = Number(answer.coverage.sourceCoverage ?? answer.coverage.evidenceCoverage ?? 0);
-  return <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-300"><span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-cyan-300" /> {formatPercent(answer.confidence.score)} confidence</span><span>{formatPercent(coverage)} source coverage</span><span>Updated {relativeTime(answer.computedAt)}</span>{answer.status === 'stale' && <span className="text-amber-300">Stale snapshot</span>}</div>;
+  const coverage = Number(answer.coverage.evidenceCoverage ?? answer.coverage.sourceCoverage ?? 0);
+  return <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-300"><span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-cyan-300" /> {formatPercent(answer.confidence.score)} confidence</span><span>{formatPercent(coverage)} evidence coverage</span><span>Updated {relativeTime(answer.computedAt)}</span>{answer.status === 'stale' && <span className="text-amber-300">Stale snapshot</span>}</div>;
 }
 
 function Metric({ label, value, detail, accent }: { label: string; value: string; detail?: string; accent?: boolean }) {
@@ -127,8 +130,8 @@ function ThemeList({ title, label, items, empty }: { title: string; label: strin
 
 function AnswerPanel({ eyebrow, answer, emptyText, destination, onCitation, variant }: { eyebrow: string; answer: AnswerSnapshotRecord | null; emptyText: string; destination: string; onCitation: (citation: AnswerCitation) => void; variant: 'capital' | 'demand' }) {
   if (!answer) return <section className="answer-panel"><p className="answer-kicker">{eyebrow}</p><h2 className="answer-title">Evidence is still accumulating.</h2><p className="mt-4 max-w-xl text-sm leading-6 text-slate-300">{emptyText}</p><Link href={destination} className="answer-link mt-8">Explore the engine <ArrowRight className="h-4 w-4" /></Link></section>;
-  const first = answer.sections[0];
-  const second = answer.sections[1];
+  const first = variant === 'demand' ? answer.sections.find(section => section.key === 'stated_demand') : answer.sections[0];
+  const second = variant === 'demand' ? answer.sections.find(section => section.key === 'observed_demand') : answer.sections[1];
   const trend = answer.summary.rawChangePercent;
   const headline = typeof answer.summary.headline === 'string' && answer.summary.headline.trim() ? answer.summary.headline : first?.narrative || emptyText;
   return <section className="answer-panel"><div className="relative z-10 flex h-full flex-col">

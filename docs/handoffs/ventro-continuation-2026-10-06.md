@@ -2457,3 +2457,45 @@ Verification:
 Required rollout: commit and push this small dashboard-query repair, wait for the Vercel deployment, then hard-refresh `/dashboard?period=90`. No migration, ingestion rerun, thesis rerun, pattern rerun, or answer recomputation is required. The market-demand panel should resolve the existing published snapshot; the investing-now panel remains honestly empty until verified funding participants are repaired.
 
 Status: `FIXED_AND_VERIFIED — DEPLOYMENT_REQUIRED`.
+
+### Answer clarity and evidence-drawer repair (2026-10-09)
+
+The canonical snapshot began rendering after the fingerprint repair, but the product still failed to answer the question clearly and its evidence drawer returned an error.
+
+Confirmed root causes:
+
+- `IntelligenceDashboard` treated `answer.sections[0]` and `[1]` as stated and observed demand. Preference ranking can reorder sections, so the observed column could display the wrong section and falsely report insufficient history.
+- The citation endpoint used an ambiguous PostgREST embed from `document_versions` to `source_documents`. Hosted Supabase reproduced `PGRST201` because both `source_documents_latest_version_fkey` and `document_versions_source_document_id_fkey` are valid relationships.
+- Evidence citations were persisted without user-facing labels, producing “Source 1” chips despite known publishers.
+- The card displayed connector-fetch coverage before citation coverage, showing `0% source coverage` even though every material thesis/pattern record had evidence.
+- The deterministic headline described methodology instead of answering what investors want.
+
+Implemented:
+
+- Citation API embeds now use explicit foreign-key paths for snapshot, evidence, document-version, and source-document relationships.
+- Excerpt-only rights now permit the intentionally stored short excerpt while still withholding full text.
+- Dashboard stated/observed sections are selected by stable section keys, not personalized array positions.
+- Evidence chips are named by fund and deduplicated for display.
+- The confidence row now reports evidence coverage, which is the metric users need for this answer.
+- Market-demand methodology advanced to `two-answer-method-v2`; its deterministic headline directly summarizes the leading stated and observed themes.
+- Direct thesis and portfolio citations receive publisher-aware labels before snapshot persistence.
+
+Hosted result:
+
+- New published market-demand snapshot: `e57b6ab5-f27d-48ab-a6b0-5201d77d155b`.
+- Headline: “Across 5 official investor theses, applications (4), developer tools (3), infrastructure (2) appear most often; portfolio evidence also points to applications, foundation models, robotics.”
+- Evidence coverage: 100%; stated records: 5; observed records: 2; eligible patterns: 4.
+- Named direct sources include Sequoia Capital, Andreessen Horowitz, Air Street Capital, Index Ventures, and Radical Ventures.
+- A hosted direct-evidence query returned the Sequoia excerpt, publisher, publication/fetch timestamps, and canonical source URL without error.
+
+Verification:
+
+- Focused suites: 3 suites and 31 tests passed.
+- Full Jest run: 46 suites and 408 tests passed; 1 Docker-only suite and 22 tests skipped.
+- Typecheck passed.
+- Lint passed with 0 errors and 197 existing warnings.
+- Production build passed and generated all 34 static pages.
+
+Required rollout: commit and push the code changes, wait for Vercel, then hard-refresh the dashboard. The hosted v2 snapshot is already published, so no migration or workflow rerun is needed. The market-demand card and evidence sources will work after deployment. The separate investing-now answer remains empty until verified funding participants are repaired.
+
+Status: `ANSWER_AND_HOSTED_DATA_FIXED — UI DEPLOYMENT_REQUIRED`.

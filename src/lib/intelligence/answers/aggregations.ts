@@ -12,7 +12,7 @@ import type {
 } from './types';
 
 export const ANSWER_SCHEMA_VERSION = 'answer-snapshot-v1';
-export const ANSWER_METHODOLOGY_VERSION = 'two-answer-method-v1';
+export const ANSWER_METHODOLOGY_VERSION = 'two-answer-method-v2';
 
 function inRange(date: string, start: string, end: string): boolean {
   const value = new Date(date).getTime();
@@ -63,6 +63,29 @@ function rankedCounts(values: Array<string | null>, limit = 5): Array<{ key: str
     .map(([key, count]) => ({ key, count }))
     .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
     .slice(0, limit);
+}
+
+function readableTheme(value: string): string {
+  return value.replaceAll('_', ' ');
+}
+
+export function buildMarketDemandHeadline(
+  statedThemes: Array<{ key: string; count: number }>,
+  observedThemes: Array<{ key: string; count: number }>,
+  statedRecordCount: number,
+): string {
+  if (statedThemes.length === 0 && observedThemes.length === 0) {
+    return 'There is not enough qualifying evidence to describe current investor demand yet.';
+  }
+  const statedSummary = statedThemes.slice(0, 3)
+    .map(theme => `${readableTheme(theme.key)} (${theme.count})`)
+    .join(', ');
+  const observedSummary = observedThemes.slice(0, 3).map(theme => readableTheme(theme.key)).join(', ');
+  if (statedSummary && observedSummary) {
+    return `Across ${statedRecordCount} official investor theses, ${statedSummary} appear most often; portfolio evidence also points to ${observedSummary}.`;
+  }
+  if (statedSummary) return `Across ${statedRecordCount} official investor theses, ${statedSummary} appear most often.`;
+  return `Observed portfolio evidence most often points to ${observedSummary}.`;
 }
 
 function percentageChange(current: number, previous: number): number | null {
@@ -282,14 +305,14 @@ export function buildMarketDemandDraft(filters: AnswerFilters, bundle: AnswerInp
   if (stated.length === 0) caveatText.push('No qualifying official stated-thesis records match these filters.');
   if (observed.length === 0) caveatText.push('No qualifying observed-thesis records have sufficient verified investment coverage.');
 
-  const statedCitations = uniqueCitations(stated.flatMap(record => [
-    ...record.citations,
-    { stance: 'supports' as const, thesisRecordId: record.id, label: `${record.fundName} stated thesis` },
-  ]));
-  const observedCitations = uniqueCitations(observed.flatMap(record => [
-    ...record.citations,
-    { stance: 'supports' as const, thesisRecordId: record.id, label: `${record.fundName} observed thesis` },
-  ]));
+  const statedCitations = uniqueCitations(stated.flatMap(record => record.citations.map(citation => ({
+    ...citation,
+    label: citation.label ?? `${record.fundName} official thesis`,
+  }))));
+  const observedCitations = uniqueCitations(observed.flatMap(record => record.citations.map(citation => ({
+    ...citation,
+    label: citation.label ?? `${record.fundName} portfolio evidence`,
+  }))));
   const patternCitations = uniqueCitations(patterns.flatMap(record => [
     ...record.citations,
     { stance: 'supports' as const, patternId: record.id, label: record.name },
@@ -349,7 +372,7 @@ export function buildMarketDemandDraft(filters: AnswerFilters, bundle: AnswerInp
     filterFingerprint: fingerprint(filters),
     inputFingerprint: baseFingerprint('market_demand', filters, bundle, ids),
     summary: {
-      headline: 'Official statements and observed behavior are reported separately.',
+      headline: buildMarketDemandHeadline(statedThemes, observedThemes, stated.length),
       statedThemes,
       observedThemes,
       recurringThemes,

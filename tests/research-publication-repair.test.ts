@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { feedFilterSchema } from '@/lib/validators/schemas';
 import { extractThesisThemes } from '@/lib/intelligence/answers/thesis-materializer';
+import { buildMarketDemandHeadline } from '@/lib/intelligence/answers/aggregations';
 import { fingerprint, parseAnswerFilters } from '@/lib/intelligence/answers/filters';
 import { buildDashboardAnswerQuery } from '@/lib/intelligence/answers/request-query';
 
@@ -94,5 +95,18 @@ describe('research publication repair', () => {
     expect(filters.periodEnd).toBe('2026-10-09T00:00:00.000Z');
     expect(filters.periodStart).toBe('2026-07-11T00:00:00.000Z');
     expect(fingerprint(filters)).toBe('55cb124e136a5f09602bf8a7e67cf84def4d5352cf0eca574e7506ba6f6df671');
+  });
+
+  it('answers market demand in plain language and keeps direct evidence inspectable', () => {
+    expect(buildMarketDemandHeadline(
+      [{ key: 'applications', count: 4 }, { key: 'developer_tools', count: 3 }, { key: 'infrastructure', count: 2 }],
+      [{ key: 'applications', count: 1 }, { key: 'foundation_models', count: 1 }, { key: 'robotics', count: 1 }],
+      5,
+    )).toBe('Across 5 official investor theses, applications (4), developer tools (3), infrastructure (2) appear most often; portfolio evidence also points to applications, foundation models, robotics.');
+
+    const citationRoute = read('src/app/api/intelligence/citations/[id]/route.ts');
+    expect(citationRoute).toMatch(/claim_evidence!answer_snapshot_citations_claim_evidence_id_fkey/);
+    expect(citationRoute).toMatch(/source_documents!document_versions_source_document_id_fkey/);
+    expect(citationRoute).toMatch(/rights\.excerpt_only === true/);
   });
 });
