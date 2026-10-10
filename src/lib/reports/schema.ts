@@ -37,7 +37,7 @@ const personalizationDefaults = personalizationSchema.parse({
 
 export const reportRequestSchema = z.object({
   title: z.string().trim().min(3).max(140),
-  requestedPages: z.number().int().min(3).max(20),
+  requestedPages: z.number().int().min(3).max(15),
   periodDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
   geographies: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
   fundIds: z.array(z.string().uuid()).max(20).default([]),
@@ -56,17 +56,22 @@ export const reportRequestSchema = z.object({
 export type ReportRequest = z.infer<typeof reportRequestSchema>;
 
 export interface ReportSource {
+  id: string;
   label: string;
   url: string;
   sourceType: 'funding' | 'thesis' | 'pattern' | 'fund' | 'yc';
 }
 
+export interface ReportStatement {
+  text: string;
+  sourceIds: string[];
+}
+
 export interface ReportSectionContent {
   key: string;
   title: string;
-  summary: string;
-  bullets: string[];
-  sourceIndexes: number[];
+  summary: ReportStatement;
+  findings: ReportStatement[];
 }
 
 export interface PersonalizedReportContent {
@@ -80,4 +85,9 @@ export interface PersonalizedReportContent {
   sections: ReportSectionContent[];
   caveats: string[];
   sources: ReportSource[];
+  verification: {
+    status: 'verified' | 'deterministic';
+    verifier: string;
+    issues: string[];
+  };
 }

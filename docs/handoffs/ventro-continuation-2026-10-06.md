@@ -2549,3 +2549,53 @@ Required rollout:
 4. Hard-refresh `/dashboard?period=90`; the investing-now card should now show the verified three-round answer after this code revision deploys.
 
 Status: `IMPLEMENTED_AND_HOSTED_SCHEMA_LIVE — CODE_DEPLOYMENT_AND_ONE_WORD_VISUAL_CHECK_REQUIRED`.
+
+### Personalized report synthesis and citation-quality repair (2026-10-10)
+
+The first generated user report exposed internal evidence bookkeeping instead of delivering an analyst-quality answer. Inspection of `my-ai-capital-intelligence-brief (1).docx` confirmed the following defects:
+
+- Every sentence in a section received the full section-level numeric source list, producing references such as `[143, 144, 145, 146, 147]` and `[148…236]`.
+- Pattern and thesis sections printed database-shaped records (`Sample=40 cos`, raw status/methodology fields, `Source: N/A`) instead of conclusions.
+- The selected-investor section queried a generic 50-fund list and emitted many zero-activity profiles.
+- Duplicate round/thesis records appeared in the document.
+- The requested page count did not meaningfully bound section count or finding density.
+- The optional OpenAI editor was allowed to fail back silently, and its contract preserved the bad section-level citation arrays.
+
+Implemented report v2:
+
+- Replaced numeric `sourceIndexes` with stable internal evidence IDs attached to each individual statement. Internal IDs never render in the DOCX.
+- The Word generator now shows human-readable, clickable evidence names immediately under the supported statement and a named source register without numeric citation arrays.
+- Added deterministic report quality gates that reject internal IDs, numeric citation dumps, raw database prose, unknown evidence references, and dropped citations.
+- Added direct investor read-throughs. Observed themes are ranked by company/deal evidence, producing conclusions such as “Sequoia Capital’s observed AI activity leans most toward Applications … ahead of … Foundation Models.” Stated thesis remains explicitly separate from observed behavior.
+- Consolidates duplicate investment rounds and duplicate stated/observed thesis rows before report construction.
+- Restricts investor profiles to selected or evidence-relevant funds; zero-activity catalog rows are no longer dumped into reports.
+- Converts pattern samples, windows, and counterexamples into reader-facing prose instead of serializing internal fields or JSON.
+- The requested page count now caps both section count and findings per section. Short reports prioritize capital flow, thesis comparison, selected investors, YC signals, patterns, and implications rather than forcing every detail appendix.
+- Added a two-stage provider-neutral synthesis path: NVIDIA Nemotron 3.5 Lightning 30B A3B drafts the analyst narrative; OpenAI performs the final structured evidence verification/correction when configured.
+- NVIDIA and OpenAI outputs are schema-validated. Section keys must be preserved, evidence IDs must be known, and evidence-bearing sections cannot drop citations.
+- Fail-closed behavior: if OpenAI verification is unavailable, any unverified model rewrite is discarded and the polished deterministic evidence analysis is used. The report records deterministic verification instead of claiming AI verification.
+- Report records and R2 metadata now use prompt version `personalized-report-v2`; no database migration was required because the existing JSON report content supports the new contract.
+- `/reports` now describes the analysis-and-verification flow and shows whether a completed report received independent AI verification or deterministic evidence-contract verification.
+- Added `NVIDIA_REPORT_MODEL` documentation with default `nvidia/nemotron-3.5-lightning-30b-a3b`.
+
+Verification:
+
+- Targeted report suite: 6 tests passed. It extracts the generated DOCX text, confirms named evidence is present, rejects internal numeric references, validates the Nemotron→OpenAI handoff, and locks the Sequoia comparative conclusion.
+- Live synthetic provider smoke test: NVIDIA hosted inference succeeded and returned the required report structure; generated DOCX content contained readable Sequoia conclusions and named source links with no internal reference arrays.
+- The local `OPENAI_API_KEY` returned HTTP 401, so the live synthetic run correctly fell back to deterministic verification. A valid Vercel OpenAI key is required for the `AI drafted and independently verified` state.
+- Full serial Jest run: 47 suites passed, 417 tests passed; 2 suites and 23 tests skipped (the manual live-provider smoke test and the Docker-only database suite).
+- Typecheck passed.
+- Targeted ESLint passed with 0 errors and 2 existing UI warnings.
+- Production build passed and generated all 35 application pages.
+- `git diff --check` passed (line-ending notices only).
+- The DOCX package and extracted text were verified structurally. Visual page rendering remains unavailable because LibreOffice `soffice.exe` is not installed on this Windows host.
+
+Required rollout:
+
+1. Replace the invalid OpenAI credential in Vercel (`OPENAI_API_KEY`). Keep `OPENAI_REPORT_MODEL=gpt-5-mini` or another Responses-compatible structured-output model.
+2. Add/confirm `NVIDIA_API_KEY`. `NVIDIA_REPORT_MODEL` is optional and defaults to `nvidia/nemotron-3.5-lightning-30b-a3b`.
+3. Commit and push this revision, wait for Vercel, then generate a fresh report. Previously generated files are immutable R2 artifacts and will not be rewritten.
+4. Confirm the new report card says `AI drafted and independently verified`. If it says `Evidence contract verified · AI verifier unavailable`, inspect the Vercel OpenAI secret/runtime logs.
+5. Open one generated file in Word for the remaining visual-only check.
+
+Status: `REPORT_V2_IMPLEMENTED_AND_VERIFIED — VALID_OPENAI_PRODUCTION_SECRET_AND_DEPLOYMENT_REQUIRED`.

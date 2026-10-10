@@ -133,7 +133,7 @@ export default function ReportsPage() {
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">Personalized intelligence</p>
             <h1 className="text-3xl font-bold text-ink-950">Build your research report</h1>
-            <p className="mt-2 max-w-3xl text-text-secondary">Choose the evidence window, markets, investors, YC batches, and questions that matter to you. Ventro assembles a cited Word document from published evidence.</p>
+            <p className="mt-2 max-w-3xl text-text-secondary">Choose the evidence window, markets, investors, YC batches, and questions that matter to you. Ventro turns published evidence into an analyst-written Word brief, then verifies its claims and source links.</p>
           </div>
           <div className="flex items-center gap-2 rounded-md border border-cyan-700/20 bg-cyan-50 px-4 py-3 text-sm text-cyan-950">
             <ShieldCheck className="h-5 w-5 text-cyan-700" /> Private file · stored in R2
@@ -180,10 +180,10 @@ export default function ReportsPage() {
 
               {error && <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{error}</div>}
               <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-4 text-sm leading-6 text-amber-950">
-                <strong>Edit before sharing.</strong> The file is an AI-assisted, evidence-grounded starting point. Verify cited sources, add your own judgment, and rewrite conclusions so the final report is distinct and appropriate for your audience.
+                <strong>Built for decisions, still yours to own.</strong> The report gives a finished evidence-backed answer. Before external circulation, verify consequential sources and adapt the voice or organization-specific judgment without removing factual qualifications.
               </div>
               <Button size="lg" loading={generating} disabled={loading || title.trim().length < 3} onClick={generate} className="w-full sm:w-auto">
-                <Sparkles className="h-4 w-4" /> {generating ? 'Building cited DOCX…' : 'Generate personalized DOCX'}
+                <Sparkles className="h-4 w-4" /> {generating ? 'Analyzing and verifying evidence…' : 'Generate verified DOCX'}
               </Button>
             </CardContent>
           </Card>
@@ -202,6 +202,7 @@ export default function ReportsPage() {
                     <div><h3 className="font-bold text-ink-950">{report.title}</h3><p className="mt-1 text-xs text-text-muted">{report.period_days} days · {report.requested_pages} target pages · {new Date(report.created_at).toLocaleDateString()}</p></div>
                     <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${report.status === 'ready' ? 'bg-emerald-100 text-emerald-800' : report.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{report.status}</span>
                   </div>
+                  {report.status === 'ready' && <p className="mt-2 text-xs text-text-muted">{report.generation_provider?.includes('openai_verified') ? 'AI drafted and independently verified' : report.generation_provider?.startsWith('nvidia') ? 'Evidence contract verified · AI verifier unavailable' : 'Evidence contract verified'}</p>}
                   {report.status === 'ready' && <a href={`/api/reports/${report.id}/download`} className="mt-4 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-cyan-700 hover:text-cyan-900"><Download className="h-4 w-4" /> Download DOCX {fileSize(report.file_size_bytes) && `· ${fileSize(report.file_size_bytes)}`}</a>}
                   {report.status === 'failed' && <p className="mt-3 text-xs text-red-700">Generation failed. Your settings were saved; create a fresh report to retry.</p>}
                 </CardContent>

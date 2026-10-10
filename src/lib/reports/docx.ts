@@ -15,6 +15,7 @@ import {
   WidthType,
 } from 'docx';
 import type { PersonalizedReportContent, ReportRequest } from './schema';
+import { evidenceLabels } from './synthesis';
 
 const INK = '071B2A';
 const CYAN = '007E9D';
@@ -27,19 +28,24 @@ function safeName(title: string): string {
   return `${normalized || 'ventro-personalized-report'}.docx`;
 }
 
-function sourceMarker(indexes: number[]): TextRun | null {
-  if (!indexes.length) return null;
-  return new TextRun({ text: `  [${indexes.join(', ')}]`, color: CYAN, size: 18 });
-}
-
-function bullet(text: string, sourceIndexes: number[]) {
-  const marker = sourceMarker(sourceIndexes);
+function bullet(text: string) {
   return new Paragraph({
     style: 'ReportBody',
     bullet: { level: 0 },
     spacing: { after: 100 },
-    children: [new TextRun(text), ...(marker ? [marker] : [])],
+    children: [new TextRun(text)],
   });
+}
+
+function evidenceLine(sourceIds: string[], content: PersonalizedReportContent): Paragraph | null {
+  const sources = evidenceLabels(sourceIds, content.sources);
+  if (!sources.length) return null;
+  const children: Array<TextRun | ExternalHyperlink> = [new TextRun({ text: 'Evidence: ', bold: true, color: MUTED, size: 17 })];
+  sources.forEach((source, index) => {
+    if (index > 0) children.push(new TextRun({ text: '  ·  ', color: MUTED, size: 17 }));
+    children.push(new ExternalHyperlink({ link: source.url, children: [new TextRun({ text: source.label, color: CYAN, underline: {}, size: 17 })] }));
+  });
+  return new Paragraph({ style: 'Evidence', children });
 }
 
 export async function createReportDocx(content: PersonalizedReportContent, request: ReportRequest): Promise<{ buffer: Buffer; fileName: string }> {
@@ -63,7 +69,7 @@ export async function createReportDocx(content: PersonalizedReportContent, reque
   if (request.purpose) children.push(new Paragraph({ style: 'Meta', children: [new TextRun(`Purpose: ${request.purpose}`)] }));
 
   children.push(
-    new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun('Executive summary')] }),
+    new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun('Executive answer')] }),
     new Paragraph({ style: 'Lead', children: [new TextRun(content.executiveSummary)] }),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
@@ -82,34 +88,39 @@ export async function createReportDocx(content: PersonalizedReportContent, reque
         ],
       })),
     }),
-    new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun('How to use this report')] }),
-    new Paragraph({ style: 'ReportBody', children: [new TextRun('Use this as a research starting point. Review the cited evidence, edit the language, and add your own context before relying on or sharing the document. Personal editing is essential to make the final report distinct and decision-specific.')] }),
+    new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun('Reader note')] }),
+    new Paragraph({ style: 'ReportBody', children: [new TextRun('This is a final evidence brief for the selected scope. Preserve the evidence links and factual qualifications if you adapt the voice, add organization-specific judgment, or circulate it externally.')] }),
   );
 
-  content.sections.forEach((item, index) => {
-    const marker = sourceMarker(item.sourceIndexes);
+  content.sections.forEach(item => {
+    const summaryEvidence = evidenceLine(item.summary.sourceIds, content);
     children.push(
-      new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: index > 0 && index % 2 === 0, children: [new TextRun(item.title)] }),
-      new Paragraph({ style: 'Lead', children: [new TextRun(item.summary), ...(marker ? [marker] : [])] }),
-      ...item.bullets.map(line => bullet(line, item.sourceIndexes)),
+      new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(item.title)] }),
+      new Paragraph({ style: 'Lead', children: [new TextRun(item.summary.text)] }),
     );
+    if (summaryEvidence) children.push(summaryEvidence);
+    item.findings.forEach(finding => {
+      children.push(bullet(finding.text));
+      const evidence = evidenceLine(finding.sourceIds, content);
+      if (evidence) children.push(evidence);
+    });
   });
 
   children.push(
     new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun('Methodology and caveats')] }),
     new Paragraph({ style: 'ReportBody', children: [new TextRun(content.methodology)] }),
-    ...content.caveats.map(item => bullet(item, [])),
+    ...content.caveats.map(item => bullet(item)),
     new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: true, children: [new TextRun('Source register')] }),
   );
 
   if (!content.sources.length) {
     children.push(new Paragraph({ style: 'ReportBody', children: [new TextRun('No qualifying source links were available for this scope. Broaden the filters or wait for additional verified evidence before using the report externally.')] }));
   } else {
-    content.sources.forEach((source, index) => children.push(new Paragraph({
+    content.sources.forEach(source => children.push(new Paragraph({
       style: 'ReportBody',
       spacing: { after: 100 },
       children: [
-        new TextRun({ text: `[${index + 1}] ${source.label}: `, bold: true }),
+        new TextRun({ text: `${source.label}: `, bold: true }),
         new ExternalHyperlink({ link: source.url, children: [new TextRun({ text: source.url, color: CYAN, underline: {} })] }),
       ],
     })));
@@ -117,7 +128,7 @@ export async function createReportDocx(content: PersonalizedReportContent, reque
 
   children.push(
     new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun('Final review reminder')] }),
-    new Paragraph({ style: 'ReportBody', children: [new TextRun({ text: 'AI-generated research brief — verify the sources, edit the analysis, and personalize the conclusions before relying on or sharing it. This is not investment, legal, or financial advice.', bold: true })] }),
+    new Paragraph({ style: 'ReportBody', children: [new TextRun({ text: `Evidence verification: ${content.verification.status === 'verified' ? 'AI verifier plus deterministic citation contracts' : 'deterministic citation contracts'}. Verify primary sources before making consequential decisions. This is not investment, legal, or financial advice.`, bold: true })] }),
   );
 
   const document = new Document({
@@ -133,6 +144,7 @@ export async function createReportDocx(content: PersonalizedReportContent, reque
         { id: 'Meta', name: 'Meta', basedOn: 'Normal', run: { font: 'Aptos', size: 18, color: MUTED }, paragraph: { spacing: { after: 70 } } },
         { id: 'Lead', name: 'Lead', basedOn: 'Normal', run: { font: 'Aptos', size: 25, color: INK }, paragraph: { spacing: { after: 220, line: 330 } } },
         { id: 'ReportBody', name: 'Report Body', basedOn: 'Normal', run: { font: 'Aptos', size: 21, color: INK }, paragraph: { spacing: { after: 130, line: 300 } } },
+        { id: 'Evidence', name: 'Evidence', basedOn: 'Normal', run: { font: 'Aptos', size: 17, color: MUTED }, paragraph: { spacing: { after: 130 }, indent: { left: 360 }, keepNext: false } },
         { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'ReportBody', quickFormat: true, run: { font: 'Aptos Display', size: 34, bold: true, color: INK }, paragraph: { spacing: { before: 320, after: 150 }, keepNext: true } },
         { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'ReportBody', quickFormat: true, run: { font: 'Aptos Display', size: 26, bold: true, color: INK }, paragraph: { spacing: { before: 240, after: 100 }, keepNext: true } },
       ],

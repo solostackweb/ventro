@@ -68,7 +68,8 @@ export async function POST(request: NextRequest) {
     const r2Key = `personalized-reports/${user.id}/${report.id}/${fileName}`;
     const upload = await uploadToR2(r2Key, buffer, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', {
       report_id: report.id,
-      prompt_version: 'personalized-report-v1',
+      prompt_version: 'personalized-report-v2',
+      verification_status: generated.content.verification.status,
     });
     if (!upload.success) throw new Error(`REPORT_UPLOAD_FAILED:${upload.error || 'unknown upload error'}`);
 
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
       file_size_bytes: buffer.byteLength,
       generation_provider: generated.provider,
       generation_model: generated.model,
+      prompt_version: 'personalized-report-v2',
       completed_at: completedAt,
       error_code: null,
       error_message: null,

@@ -2,7 +2,8 @@ import { buildBothAnswerDrafts, isEligibleInvestmentEvent, isEligiblePattern, is
 import { loadAnswerInputBundle } from '@/lib/intelligence/answers/repository';
 import { ingestionSupabase } from '@/lib/supabase/ingestion';
 import type { AnswerFilters, InvestmentEvent, ThesisRecordInput, PatternRecordInput } from '@/lib/intelligence/answers/types';
-import type { PersonalizedReportContent, ReportRequest, ReportSectionContent, ReportSource } from './schema';
+import type { PersonalizedReportContent, ReportRequest, ReportSectionContent, ReportSource, ReportStatement } from './schema';
+import { synthesizeAndVerifyReport } from './synthesis';
 
 // Supabase types are intentionally mapped at this boundary until generated DB types are introduced.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,85 +33,29 @@ function topCounts(values: string[], limit = 5): Array<[string, number]> {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
 }
 
-function sourceIndexes(sources: ReportSource[], urls: string[]): number[] {
-  return unique(urls.map(url => sources.findIndex(source => source.url === url) + 1).filter(index => index > 0));
+function sourceIndexes(sources: ReportSource[], urls: string[]): string[] {
+  const wanted = new Set(urls.filter(Boolean));
+  return sources.filter(source => wanted.has(source.url)).map(source => source.id).slice(0, 4);
 }
 
-function section(key: string, title: string, summary: string, bullets: string[], indexes: number[]): ReportSectionContent {
-  return { key, title, summary, bullets: bullets.filter(Boolean), sourceIndexes: unique(indexes) };
+function statement(text: string, sourceIds: string[] = []): ReportStatement {
+  return { text, sourceIds: unique(sourceIds).slice(0, 4) };
 }
 
-function jsonSummary(value: Record<string, unknown>): string {
-  for (const key of ['headline', 'summary', 'narrative', 'text']) {
-    const candidate = value[key];
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
-  }
-  return '';
+function section(key: string, title: string, summary: string, bullets: Array<string | ReportStatement>, sourceIds: string[]): ReportSectionContent {
+  return {
+    key,
+    title,
+    summary: statement(summary, sourceIds),
+    findings: bullets.filter(item => typeof item !== 'string' || Boolean(item)).map(item => typeof item === 'string' ? statement(item, sourceIds) : item),
+  };
 }
 
-async function maybeEnhanceNarrative(content: PersonalizedReportContent, request: ReportRequest): Promise<{ content: PersonalizedReportContent; provider: string; model: string }> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_REPORT_MODEL || 'gpt-5-mini';
-  if (!apiKey) return { content, provider: 'deterministic', model: 'evidence-template-v1' };
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
+function publisherLabel(url: string, fallback: string): string {
   try {
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        max_output_tokens: Math.min(12000, 1200 + request.requestedPages * 500),
-        instructions: [
-          'You are Ventro research editor. Improve clarity and decision usefulness using only the supplied evidence.',
-          'Never add companies, investors, rounds, amounts, dates, percentages, or sources that are absent.',
-          'Keep uncertainty and caveats explicit. Return JSON only with executiveSummary and sections.',
-          'Each section must preserve its key, sourceIndexes, and factual meaning.',
-          'Use professional investment memo tone. Structure bullets with clear metrics and attribution.',
-        ].join(' '),
-        input: JSON.stringify({
-          audience: request.audience,
-          purpose: request.purpose,
-          targetPages: request.requestedPages,
-          executiveSummary: content.executiveSummary,
-          sections: content.sections,
-          caveats: content.caveats,
-        }),
-      }),
-    });
-    if (!response.ok) throw new Error(`OpenAI response ${response.status}`);
-    const payload = await response.json() as Row;
-    const outputText = typeof payload.output_text === 'string'
-      ? payload.output_text
-      : (payload.output ?? []).flatMap((item: Row) => item.content ?? []).find((item: Row) => item.type === 'output_text')?.text;
-    if (!outputText) throw new Error('OpenAI response contained no output text');
-    const cleaned = outputText.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(cleaned) as { executiveSummary?: string; sections?: ReportSectionContent[] };
-    const byKey = new Map((parsed.sections ?? []).map(item => [item.key, item]));
-    return {
-      provider: 'openai',
-      model,
-      content: {
-        ...content,
-        executiveSummary: parsed.executiveSummary?.trim() || content.executiveSummary,
-        sections: content.sections.map(original => {
-          const enhanced = byKey.get(original.key);
-          if (!enhanced) return original;
-          return {
-            ...original,
-            summary: enhanced.summary?.trim() || original.summary,
-            bullets: Array.isArray(enhanced.bullets) ? enhanced.bullets.filter(item => typeof item === 'string').slice(0, 15) : original.bullets,
-          };
-        }),
-      },
-    };
-  } catch (error) {
-    console.warn('[reports] AI enhancement unavailable; using deterministic report', error instanceof Error ? error.message : error);
-    return { content, provider: 'deterministic_fallback', model: 'evidence-template-v1' };
-  } finally {
-    clearTimeout(timer);
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return fallback;
   }
 }
 
@@ -153,7 +98,7 @@ interface EnrichedPattern extends PatternRecordInput {
   publicationReason?: string;
 }
 
-async function enrichInvestments(investments: InvestmentEvent[], roundRows: Row[], fundNames: Map<string, string>): Promise<EnrichedInvestment[]> {
+async function enrichInvestments(investments: InvestmentEvent[], roundRows: Row[]): Promise<EnrichedInvestment[]> {
   const roundSources = new Map(roundRows?.map((r: Row) => [r.id, r.source_urls ?? []]) ?? []);
   return investments.map(inv => ({
     ...inv,
@@ -197,6 +142,93 @@ async function enrichPatterns(patterns: PatternRecordInput[], patternRows: Row[]
   });
 }
 
+function dedupeInvestments(investments: InvestmentEvent[]): InvestmentEvent[] {
+  const byRound = new Map<string, InvestmentEvent>();
+  for (const event of investments) {
+    const current = byRound.get(event.roundId);
+    if (!current) {
+      byRound.set(event.roundId, event);
+      continue;
+    }
+    const participants = [...current.participants, ...event.participants].filter((participant, index, all) =>
+      all.findIndex(candidate => candidate.participantId === participant.participantId) === index,
+    );
+    byRound.set(event.roundId, {
+      ...current,
+      participants,
+      citations: [...current.citations, ...event.citations].filter((citation, index, all) =>
+        all.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(citation)) === index,
+      ),
+    });
+  }
+  return [...byRound.values()];
+}
+
+function consolidateTheses(theses: EnrichedThesis[]): EnrichedThesis[] {
+  const groups = new Map<string, EnrichedThesis[]>();
+  for (const thesis of theses) {
+    const key = `${thesis.fundId}:${thesis.kind}`;
+    groups.set(key, [...(groups.get(key) ?? []), thesis]);
+  }
+  return [...groups.values()].map(group => {
+    const primary = [...group].sort((a, b) => b.confidenceScore - a.confidenceScore || b.evidenceCount - a.evidenceCount)[0];
+    const themes = new Map<string, { theme: string; companyCount?: number; dealCount?: number; percentage?: number }>();
+    group.flatMap(item => item.themes).forEach(theme => {
+      const current = themes.get(theme.theme);
+      if (!current) themes.set(theme.theme, theme);
+      else themes.set(theme.theme, {
+        theme: theme.theme,
+        companyCount: Math.max(current.companyCount ?? 0, theme.companyCount ?? 0) || undefined,
+        dealCount: Math.max(current.dealCount ?? 0, theme.dealCount ?? 0) || undefined,
+        percentage: Math.max(current.percentage ?? 0, theme.percentage ?? 0) || undefined,
+      });
+    });
+    return {
+      ...primary,
+      themes: [...themes.values()].sort((a, b) =>
+        (b.companyCount ?? b.dealCount ?? b.percentage ?? 0) - (a.companyCount ?? a.dealCount ?? a.percentage ?? 0),
+      ),
+      citations: group.flatMap(item => item.citations).filter((citation, index, all) =>
+        all.findIndex(candidate => JSON.stringify(candidate) === JSON.stringify(citation)) === index,
+      ),
+      caveats: unique(group.flatMap(item => item.caveats)),
+      counterEvidence: unique(group.flatMap(item => item.counterEvidence)),
+      evidenceCount: group.reduce((total, item) => total + item.evidenceCount, 0),
+      sourceUrl: group.find(item => item.sourceUrl)?.sourceUrl ?? '',
+    };
+  });
+}
+
+function themeEvidence(theme: EnrichedThesis['themes'][number]): string {
+  if (theme.companyCount) return `${theme.companyCount} portfolio companies`;
+  if (theme.dealCount) return `${theme.dealCount} qualifying deals`;
+  if (theme.percentage !== undefined) return `${Math.round(theme.percentage * (theme.percentage <= 1 ? 100 : 1))}% of the observed sample`;
+  return '';
+}
+
+export function thesisReadThrough(thesis: Pick<EnrichedThesis, 'fundName' | 'kind' | 'themes'>): string {
+  const ranked = thesis.themes.slice(0, 4);
+  if (!ranked.length) return `${thesis.fundName} has a published ${thesis.kind} thesis record, but its themes are not sufficiently resolved for a directional conclusion.`;
+  const lead = ranked[0];
+  const leadEvidence = themeEvidence(lead);
+  const followers = ranked.slice(1).map(theme => {
+    const evidence = themeEvidence(theme);
+    return `${humanize(theme.theme)}${evidence ? ` (${evidence})` : ''}`;
+  });
+  const mode = thesis.kind === 'stated' ? 'official thesis emphasizes' : 'observed AI activity leans most toward';
+  return `${thesis.fundName}’s ${mode} ${humanize(lead.theme)}${leadEvidence ? ` (${leadEvidence})` : ''}${followers.length ? `, ahead of ${followers.join(' and ')}` : ''}.`;
+}
+
+function selectSectionsForLength(sections: ReportSectionContent[], pages: number): ReportSectionContent[] {
+  const priority = ['capital_flow', 'investor_theses', 'selected_investors', 'yc_signals', 'market_patterns', 'implications', 'investment_detail', 'thesis_detail', 'pattern_detail', 'evidence_trail'];
+  const maximum = pages <= 3 ? 4 : pages <= 4 ? 5 : pages <= 6 ? 7 : pages <= 8 ? 9 : 10;
+  const findingLimit = pages <= 4 ? 4 : pages <= 8 ? 6 : 8;
+  return [...sections]
+    .sort((a, b) => priority.indexOf(a.key) - priority.indexOf(b.key))
+    .slice(0, maximum)
+    .map(item => ({ ...item, findings: item.findings.slice(0, findingLimit) }));
+}
+
 export async function buildPersonalizedReport(request: ReportRequest, now = new Date()): Promise<{ content: PersonalizedReportContent; provider: string; model: string }> {
   const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const periodStart = new Date(periodEnd.getTime() - request.periodDays * DAY_MS);
@@ -214,10 +246,10 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
   const scopedInvestments = bundle.investments.filter(event =>
     request.fundIds.length === 0 || event.participants.some(participant => selectedFundSet.has(participant.fundId)),
   );
-  const investments = scopedInvestments.filter(event =>
+  const investments = dedupeInvestments(scopedInvestments.filter(event =>
     isEligibleInvestmentEvent(event, filters) &&
     new Date(event.announcedDate) >= periodStart && new Date(event.announcedDate) < periodEnd,
-  );
+  ));
   const theses = bundle.theses.filter(thesis => isEligibleThesis(thesis, filters) && (request.fundIds.length === 0 || selectedFundSet.has(thesis.fundId)));
   const patterns = bundle.patterns.filter(pattern => isEligiblePattern(pattern, filters) && (request.ycBatchIds.length === 0 || request.ycBatchIds.some(batch => {
     const batches = pattern.filters.ycBatchId ? [pattern.filters.ycBatchId] : [];
@@ -225,9 +257,14 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
   })));
 
   const roundIds = investments.map(event => event.roundId);
+  const relevantFundIds = unique([
+    ...request.fundIds,
+    ...investments.flatMap(event => event.participants.map(participant => participant.fundId)),
+    ...theses.map(thesis => thesis.fundId),
+  ]).slice(0, 100);
   const [roundRows, fundRows, thesisRows, patternRows, ycRows, companyRows, participantRows] = await Promise.all([
     roundIds.length ? ingestionSupabase.from('funding_rounds').select('id,source_urls,company_id,announced_date,round_stage,amount_usd,lead_investor_ids').in('id', roundIds) : Promise.resolve({ data: [], error: null }),
-    request.fundIds.length ? ingestionSupabase.from('funds').select('id,canonical_name,source_links,hq_country,firm_type').in('id', request.fundIds) : ingestionSupabase.from('funds').select('id,canonical_name,source_links,hq_country,firm_type').limit(50),
+    relevantFundIds.length ? ingestionSupabase.from('funds').select('id,canonical_name,source_links,hq_country,firm_type').in('id', relevantFundIds) : Promise.resolve({ data: [], error: null }),
     theses.length ? ingestionSupabase.from('stated_thesis').select('fund_id,text,source_url,date_stated').in('fund_id', unique(theses.map(item => item.fundId))).order('date_stated', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
     patterns.length ? ingestionSupabase.from('patterns').select('id,source_links,filter_dimensions').in('id', patterns.map(item => item.id)) : Promise.resolve({ data: [], error: null }),
     request.ycBatchIds.length ? ingestionSupabase.from('yc_batches').select('id,batch_name,total_companies,ai_companies_count,source_links').in('id', request.ycBatchIds) : ingestionSupabase.from('yc_batches').select('id,batch_name,total_companies,ai_companies_count,source_links').order('year', { ascending: false }).limit(4),
@@ -239,28 +276,28 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
   const sources: ReportSource[] = [];
   const addSource = (label: string, url: string, sourceType: ReportSource['sourceType']) => {
     if (!url || sources.some(source => source.url === url)) return;
-    sources.push({ label, url, sourceType });
+    sources.push({ id: `evidence-${sources.length + 1}`, label, url, sourceType });
   };
-  (roundRows.data ?? []).forEach((row: Row) => (row.source_urls ?? []).forEach((url: string) => addSource('Funding-round evidence', url, 'funding')));
+  (roundRows.data ?? []).forEach((row: Row) => (row.source_urls ?? []).forEach((url: string) => addSource(`${publisherLabel(url, 'Funding source')} — funding evidence`, url, 'funding')));
   (fundRows.data ?? []).forEach((row: Row) => (row.source_links ?? []).forEach((url: string) => addSource(`${row.canonical_name} profile`, url, 'fund')));
-  (thesisRows.data ?? []).forEach((row: Row) => addSource('Official investor thesis', row.source_url, 'thesis'));
-  (patternRows.data ?? []).forEach((row: Row) => (row.source_links ?? []).forEach((url: string) => addSource('Pattern evidence', url, 'pattern')));
+  (thesisRows.data ?? []).forEach((row: Row) => addSource(`${publisherLabel(row.source_url, 'Investor')} — official thesis`, row.source_url, 'thesis'));
+  (patternRows.data ?? []).forEach((row: Row) => (row.source_links ?? []).slice(0, 3).forEach((url: string) => addSource(`${publisherLabel(url, 'Market source')} — pattern evidence`, url, 'pattern')));
   (ycRows.data ?? []).forEach((row: Row) => (row.source_links ?? []).forEach((url: string) => addSource(`${row.batch_name} directory`, url, 'yc')));
 
-  const drafts = buildBothAnswerDrafts(filters, { ...bundle, investments: scopedInvestments, theses, patterns }, now);
+  const drafts = buildBothAnswerDrafts(filters, { ...bundle, investments, theses, patterns }, now);
   const investing = drafts.find(draft => draft.kind === 'investing_now');
   const demand = drafts.find(draft => draft.kind === 'market_demand');
   const stages = topCounts(investments.map(event => event.stage || 'undisclosed'));
-  const themes = topCounts([
-    ...investments.flatMap(event => event.domains),
-    ...theses.flatMap(thesis => thesis.themes.map(theme => theme.theme)),
-  ]);
   const fundNames = new Map<string, string>((fundRows.data ?? []).map((row: Row) => [row.id, row.canonical_name]));
   const companyMap = new Map((companyRows.data ?? []).map((row: Row) => [row.id, row]));
 
-  const enrichedInvestments = await enrichInvestments(investments, roundRows.data ?? [], fundNames);
-  const enrichedTheses = await enrichTheses(theses, thesisRows.data ?? []);
+  const enrichedInvestments = await enrichInvestments(investments, roundRows.data ?? []);
+  const enrichedTheses = consolidateTheses(await enrichTheses(theses, thesisRows.data ?? []));
   const enrichedPatterns = await enrichPatterns(patterns, patternRows.data ?? []);
+  const themes = topCounts([
+    ...investments.flatMap(event => event.domains),
+    ...enrichedTheses.flatMap(thesis => thesis.themes.map(theme => theme.theme)),
+  ]);
 
   const sections: ReportSectionContent[] = [];
   const include = new Set(request.includedSections);
@@ -307,17 +344,17 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
     const statedThemes = topCounts(statedTheses.flatMap(t => t.themes.map(th => th.theme)));
     const observedThemes = topCounts(observedTheses.flatMap(t => t.themes.map(th => th.theme)));
 
-    sections.push(section('investor_theses', 'Investor Theses: Stated vs Observed',
-      demand?.sections[0]?.narrative || 'Official statements and observed behavior are kept separate so attribution remains clear.',
+    const thesisSourceIds = sourceIndexes(sources, (thesisRows.data ?? []).map((row: Row) => row.source_url));
+    sections.push(section('investor_theses', 'What investors say versus what they do',
+      demand?.sections[0]?.narrative || 'Published investor language and observed portfolio behavior point in related—but not identical—directions.',
       [
-        `Stated theses (${statedTheses.length}): ${statedThemes.slice(0, 5).map(([t, c]) => `${humanize(t)} (${c})`).join(', ')}.`,
-        `Observed theses (${observedTheses.length}): ${observedThemes.slice(0, 5).map(([t, c]) => `${humanize(t)} (${c})`).join(', ')}.`,
-        personalization.includeThesisComparison && statedTheses.length > 0 ? 'See Thesis Detail section for side-by-side comparison table with confidence scores, evidence counts, and source URLs.' : '',
-        ...enrichedTheses.slice(0, 12).map(t => {
-          const tThemes = t.themes.map(th => humanize(th.theme)).join(', ');
-          return `${t.fundName} [${t.kind === 'stated' ? 'STATED' : 'OBSERVED'} | ${Math.round(t.confidenceScore * 100)}%]: ${tThemes || 'No themes'} — ${t.caveats?.join('; ') || 'No caveats'}. Source: ${t.sourceUrl || 'N/A'}.`;
-        }),
-      ], sourceIndexes(sources, (thesisRows.data ?? []).map((r: Row) => r.source_url))));
+        `Across official statements, the most frequent themes are ${statedThemes.slice(0, 4).map(([t, c]) => `${humanize(t)} (${c})`).join(', ') || 'not yet concentrated'}.`,
+        `Observed portfolio behavior is most concentrated in ${observedThemes.slice(0, 4).map(([t, c]) => `${humanize(t)} (${c})`).join(', ') || 'no sufficiently evidenced theme'}.`,
+        ...enrichedTheses.slice(0, 10).map(thesis => statement(
+          thesisReadThrough(thesis),
+          sourceIndexes(sources, [thesis.sourceUrl, ...((fundRows.data ?? []).find((fund: Row) => fund.id === thesis.fundId)?.source_links ?? [])]),
+        )),
+      ], thesisSourceIds));
   }
 
   // 3. YC Signals
@@ -341,30 +378,38 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
       enrichedPatterns.length ? `${enrichedPatterns.length} published patterns met the evidence threshold for this scope.` : 'No published pattern met the selected scope and evidence threshold.',
       [
         personalization.includePatternAnalysis && enrichedPatterns.length > 0 ? 'See Pattern Detail section for methodology, sample sizes, counter-evidence, and sensitivity analysis.' : '',
-        ...enrichedPatterns.slice(0, 12).map(p => {
-          const batches = p.ycBatches?.join(', ') || 'N/A';
-          return `${p.name}: ${p.description} Sample=${p.sampleSize} cos, ${p.distinctCompanies} uniq, ${p.distinctFunds} funds, ${p.independentSourceCount} indep sources. YC batches: ${batches}. Status: ${p.status}.`;
-        }),
+        ...enrichedPatterns.slice(0, 8).map(pattern => statement(
+          `${pattern.name}: ${pattern.description} The signal is based on ${pattern.sampleSize} qualifying observations across ${pattern.distinctCompanies} companies${pattern.distinctFunds > 1 ? ` and ${pattern.distinctFunds} investors` : ''}.`,
+          sourceIndexes(sources, pattern.sourceLinks),
+        )),
       ], sourceIndexes(sources, (patternRows.data ?? []).flatMap((r: Row) => r.source_links ?? []))));
   }
 
   // 5. Selected Investor Profiles
   if (include.has('selected_investors')) {
-    const observedByFund = new Map<string, EnrichedInvestment[]>();
-    enrichedInvestments.forEach(e => e.participants.forEach(p => {
-      const fundId = p.fundName; // simplified
-      // Note: would need fundId mapping in real implementation
-    }));
-    sections.push(section('selected_investors', 'Investor Activity Profiles',
+    const relevantFunds = [...fundNames.entries()].filter(([id, name]) =>
+      request.fundIds.includes(id) || investments.some(event => event.participants.some(participant => participant.fundId === id || participant.fundName === name)) || enrichedTheses.some(thesis => thesis.fundId === id),
+    );
+    sections.push(section('selected_investors', 'Investor-by-investor read-through',
       request.fundIds.length ? 'Profiles emphasize the investors selected for this report.' : 'Profiles emphasize investors represented in the qualifying evidence.',
       [
-        ...(personalization.includeInvestorProfiles && fundNames.size > 0 ? ['See Investor Profile subsection for detailed activity, recurring themes, stage preferences, and geography focus per fund.'] : []),
-        ...[...fundNames.entries()].slice(0, 25).map(([id, name]) => {
-          const events = investments.filter(e => e.participants.some(p => p.fundName === name));
+        ...relevantFunds.slice(0, 12).map(([id, name]) => {
+          const events = investments.filter(event => event.participants.some(participant => participant.fundId === id || participant.fundName === name));
           const eventThemes = topCounts(events.flatMap(e => e.domains), 3);
           const eventStages = topCounts(events.map(e => e.stage || 'undisclosed'), 3);
           const eventGeos = topCounts(events.map(e => e.geography || 'unknown'), 3);
-          return `${name}: ${events.length} rounds — Themes: ${eventThemes.map(([t]) => humanize(t)).join(', ')} — Stages: ${eventStages.map(([s]) => humanize(s)).join(', ')} — Geos: ${eventGeos.map(([g]) => humanize(g)).join(', ')}.`;
+          const observed = enrichedTheses.find(thesis => thesis.fundId === id && thesis.kind === 'observed');
+          const stated = enrichedTheses.find(thesis => thesis.fundId === id && thesis.kind === 'stated');
+          const sourceUrls = [observed?.sourceUrl, stated?.sourceUrl, ...((fundRows.data ?? []).find((fund: Row) => fund.id === id)?.source_links ?? [])].filter(Boolean) as string[];
+          if (observed || stated) {
+            const contrast = [stated && thesisReadThrough(stated), observed && thesisReadThrough(observed)].filter(Boolean).join(' ');
+            const activity = events.length ? ` In the selected window, ${events.length} verified round${events.length === 1 ? '' : 's'} were linked to the firm, concentrated in ${eventThemes.map(([theme]) => humanize(theme)).join(', ') || 'uncategorized AI'}.` : '';
+            return statement(`${contrast}${activity}`, sourceIndexes(sources, sourceUrls));
+          }
+          return statement(
+            `${name} appears in ${events.length} verified round${events.length === 1 ? '' : 's'} in this window, led by ${eventThemes.map(([theme]) => humanize(theme)).join(', ') || 'an unresolved theme mix'} at ${eventStages.map(([stage]) => humanize(stage)).join(', ') || 'undisclosed stages'} across ${eventGeos.map(([geography]) => humanize(geography)).join(', ') || 'unresolved geographies'}.`,
+            sourceIndexes(sources, sourceUrls),
+          );
         }),
       ], sourceIndexes(sources, (fundRows.data ?? []).flatMap((r: Row) => r.source_links ?? []))));
   }
@@ -390,7 +435,7 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
         `Unique sources: ${bySource.size}.`,
         `Citation stance breakdown: Supports: ${allCitations.filter(c => c.stance === 'supports').length}, Contradicts: ${allCitations.filter(c => c.stance === 'contradicts').length}, Context: ${allCitations.filter(c => c.stance === 'context').length}.`,
         `Top sources by citation count: ${[...bySource.entries()].sort((a,b) => b[1].length - a[1].length).slice(0, 10).map(([src, cites]) => `${src} (${cites.length})`).join('; ')}.`,
-        personalization.includeEvidenceTrail ? 'Full citation index with claim IDs, evidence spans, and source URLs available in appendix.' : '',
+        personalization.includeEvidenceTrail ? 'The source register preserves the primary links used for the report’s material conclusions.' : '',
       ], sourceIndexes(sources, sources.map(s => s.url))));
   }
 
@@ -426,12 +471,10 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
         `Observed theses (inferred from portfolio): ${observedTheses.length} funds. Average confidence: ${observedTheses.length > 0 ? Math.round(observedTheses.reduce((s, t) => s + t.confidenceScore, 0) / observedTheses.length * 100) : 0}%.`,
         `Funds with both stated & observed: ${new Set([...statedTheses.map(t => t.fundId), ...observedTheses.map(t => t.fundId)]).size}.`,
         personalization.includeThesisComparison ? 'Full comparison table: Fund | Kind | Confidence | Evidence Count | Themes | Source URL | Caveats | Counter-evidence' : '',
-        ...enrichedTheses.map(t => {
-          const tThemes = t.themes.map(th => humanize(th.theme)).join(', ') || '—';
-          const caveats = t.caveats?.join('; ') || '—';
-          const counter = t.counterEvidence?.join('; ') || '—';
-          return `${t.fundName} [${t.kind === 'stated' ? 'STATED' : 'OBSERVED'} | ${Math.round(t.confidenceScore*100)}% | ${t.evidenceCount} cites] Themes: ${tThemes} | Caveats: ${caveats} | Counter: ${counter} | Source: ${t.sourceUrl || '—'}`;
-        }),
+        ...enrichedTheses.map(thesis => statement(
+          `${thesisReadThrough(thesis)} Confidence is ${Math.round(thesis.confidenceScore * 100)}% across ${thesis.evidenceCount} supporting evidence item${thesis.evidenceCount === 1 ? '' : 's'}${thesis.caveats.length ? `; limitation: ${thesis.caveats.join('; ')}` : ''}.`,
+          sourceIndexes(sources, [thesis.sourceUrl, ...((fundRows.data ?? []).find((fund: Row) => fund.id === thesis.fundId)?.source_links ?? [])]),
+        )),
       ], sourceIndexes(sources, (thesisRows.data ?? []).map((r: Row) => r.source_url))));
   }
 
@@ -440,14 +483,12 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
     sections.push(section('pattern_detail', 'Pattern Detail: Methodology, Samples & Sensitivity',
       `Deep dive into ${enrichedPatterns.length} published patterns with methodology, sample construction, counter-evidence, and sensitivity.`,
       [
-        `Patterns use deterministic detection with time-window baselines, minimum sample sizes (${Math.min(...enrichedPatterns.map(p => p.sampleSize))}+), and independent source requirements (${Math.min(...enrichedPatterns.map(p => p.independentSourceCount))}+).`,
-        personalization.includePatternAnalysis ? 'Full methodology table: Pattern | Type | Window | Baseline | Sample | Distinct Cos/Funds | Indep Sources | Coverage Metrics | Counter-evidence | Sensitivity' : '',
-        ...enrichedPatterns.map(p => {
-          const cov = p.coverageMetrics ?? {};
-          const sens = p.sensitivity ?? {};
-          const counter = p.counterexamples?.length ?? 0;
-          return `${p.name}: type=${p.patternType || 'market_trend'} | window=${p.timeWindowStart}→${p.timeWindowEnd} | baseline=${p.baselineWindowStart}→${p.baselineWindowEnd} | sample=${p.sampleSize} (${p.distinctCompanies} cos, ${p.distinctFunds} funds) | indep=${p.independentSourceCount} | coverage=${JSON.stringify(cov)} | sensitivity=${JSON.stringify(sens)} | counter-examples=${counter} | methodology=${p.methodologyVersion} | status=${p.status}`;
-        }),
+        enrichedPatterns.length ? `Patterns use fixed time windows and minimum evidence requirements. The smallest published signal in this report is based on ${Math.min(...enrichedPatterns.map(pattern => pattern.sampleSize))} qualifying observations.` : 'No pattern passed the selected evidence threshold.',
+        personalization.includePatternAnalysis ? 'Each pattern below states its evidence window, sample breadth, and known counterexamples in reader-facing language.' : '',
+        ...enrichedPatterns.map(pattern => statement(
+          `${pattern.name} covers ${fmtDate(pattern.timeWindowStart || pattern.windowStart)} to ${fmtDate(pattern.timeWindowEnd || pattern.windowEnd)} and draws on ${pattern.sampleSize} observations across ${pattern.distinctCompanies} companies. ${pattern.counterexamples?.length ? `${pattern.counterexamples.length} counterexample${pattern.counterexamples.length === 1 ? ' was' : 's were'} retained in the analysis.` : 'No qualifying counterexample was recorded for this published signal.'}`,
+          sourceIndexes(sources, pattern.sourceLinks),
+        )),
       ], sourceIndexes(sources, (patternRows.data ?? []).flatMap((r: Row) => r.source_links ?? []))));
   }
 
@@ -472,7 +513,7 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
     periodEnd: periodEnd.toISOString(),
     methodology: 'Ventro includes only evidence that meets its publication contracts. Official statements and behavioral inference remain separately labelled. Undisclosed values are never counted as zero. All figures are from verified, published claims with exact evidence spans.',
     executiveSummary: investing?.summary.headline as string || `${investments.length} verified investment events and ${theses.length} thesis records matched the selected scope.`,
-    sections,
+    sections: selectSectionsForLength(sections, request.requestedPages),
     caveats: unique([
       ...(investing?.caveats ?? []),
       ...(demand?.caveats ?? []),
@@ -483,6 +524,7 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
       'Pattern signals are deterministic detections, not predictive models.',
     ]),
     sources,
+    verification: { status: 'deterministic', verifier: 'deterministic-contracts', issues: [] },
   };
-  return maybeEnhanceNarrative(content, request);
+  return synthesizeAndVerifyReport(content, request);
 }
