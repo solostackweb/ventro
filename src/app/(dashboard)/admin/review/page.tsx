@@ -154,8 +154,21 @@ export default function ReviewQueuePage() {
       <div className="space-y-1 text-sm"><p className="font-medium">Original evidence</p>
         {item.source_urls.length === 0 ? <p className="text-accent-red">No source URL recorded; do not approve.</p> : item.source_urls.filter(sourceLink).map(url => <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="block break-all text-accent-blue underline">{url}</a>)}
       </div>
-      <div className="flex flex-wrap gap-2">{actionsFor(item).map(action => <Button key={action.status} size="sm" variant={action.status === 'verified' || action.status === 'published' ? 'primary' : 'secondary'}
-        onClick={() => { setDecision({ item, status: action.status }); setReason(''); setError(null); }}>{action.label}</Button>)}</div>
+      <div className="flex flex-wrap gap-2">{actionsFor(item).map(action => (
+        <Button 
+          key={action.status} 
+          size="sm" 
+          variant={action.status === 'verified' || action.status === 'published' ? 'primary' : 'secondary'}
+          onClick={() => { 
+            console.log('Action clicked:', action.label, action.status, item.id);
+            setDecision({ item, status: action.status }); 
+            setReason(''); 
+            setError(null); 
+          }}
+        >
+          {action.label}
+        </Button>
+      ))}</div>
     </CardContent></Card>)}
     {decision && <Card><CardContent className="space-y-3 p-5">
       <h2 className="font-semibold">{decision.item.title}: {decision.item.status} → {decision.status}</h2>

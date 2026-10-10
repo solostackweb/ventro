@@ -39,6 +39,10 @@ const SECTION_LABELS: Record<(typeof REPORT_SECTION_OPTIONS)[number], string> = 
   selected_investors: 'Selected investors',
   implications: 'Implications & next questions',
   sources: 'Source register',
+  evidence_trail: 'Evidence trail',
+  investment_detail: 'Investment detail',
+  thesis_detail: 'Thesis detail',
+  pattern_detail: 'Pattern detail',
 };
 
 const DEFAULT_SECTIONS = [...REPORT_SECTION_OPTIONS];

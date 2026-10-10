@@ -9,11 +9,35 @@ export const REPORT_SECTION_OPTIONS = [
   'selected_investors',
   'implications',
   'sources',
+  'evidence_trail',
+  'investment_detail',
+  'thesis_detail',
+  'pattern_detail',
 ] as const;
+
+const personalizationSchema = z.object({
+  includeEvidenceTrail: z.boolean().default(true),
+  includeInvestmentTables: z.boolean().default(true),
+  includeThesisComparison: z.boolean().default(true),
+  includePatternAnalysis: z.boolean().default(true),
+  includeInvestorProfiles: z.boolean().default(true),
+  includeYCAnalysis: z.boolean().default(true),
+  depthLevel: z.enum(['executive', 'analyst', 'partner']).default('analyst'),
+});
+
+const personalizationDefaults = personalizationSchema.parse({
+  includeEvidenceTrail: true,
+  includeInvestmentTables: true,
+  includeThesisComparison: true,
+  includePatternAnalysis: true,
+  includeInvestorProfiles: true,
+  includeYCAnalysis: true,
+  depthLevel: 'analyst',
+});
 
 export const reportRequestSchema = z.object({
   title: z.string().trim().min(3).max(140),
-  requestedPages: z.number().int().min(3).max(15),
+  requestedPages: z.number().int().min(3).max(20),
   periodDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
   geographies: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
   fundIds: z.array(z.string().uuid()).max(20).default([]),
@@ -22,6 +46,7 @@ export const reportRequestSchema = z.object({
   includedSections: z.array(z.enum(REPORT_SECTION_OPTIONS)).min(3).max(REPORT_SECTION_OPTIONS.length),
   audience: z.string().trim().max(240).optional().default(''),
   purpose: z.string().trim().max(500).optional().default(''),
+  personalization: personalizationSchema.optional().default(personalizationDefaults),
 }).superRefine((value, ctx) => {
   for (const required of ['executive_summary', 'sources'] as const) {
     if (!value.includedSections.includes(required)) ctx.addIssue({ code: 'custom', path: ['includedSections'], message: `${required} is required` });
