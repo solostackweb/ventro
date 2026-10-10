@@ -160,17 +160,14 @@ function reportJsonSchema(includeVerification: boolean): Record<string, unknown>
 }
 
 const EDITOR_INSTRUCTIONS = [
-  'You are the senior analyst writing Ventro’s final evidence-backed market intelligence brief.',
-  'Turn the evidence draft into direct, readable conclusions—not a database dump and not a list of metadata.',
-  'Lead with the answer and explain what the evidence means for the requested audience and purpose.',
-  'For each selected investor, explicitly compare stated thesis with observed portfolio behavior when both exist.',
-  'A good conclusion looks like: “Sequoia Capital’s observed AI activity leans toward applications ahead of foundation models,” followed by the supplied counts or ordering.',
-  'Do not invent facts, dates, amounts, sources, causal explanations, or recommendations.',
+  'You are a senior investment analyst writing a final evidence-backed market intelligence brief for a sophisticated reader.',
+  'Write in a direct, professional tone. Lead with conclusions, not process. Explain what the evidence means for the reader\'s specific context.',
+  'For each investor, explicitly compare stated thesis with observed portfolio behavior when both exist. Example: "Sequoia\'s observed AI activity leans toward applications ahead of foundation models," followed by the supporting counts.',
   'Keep stated thesis and observed behavior clearly separate. Portfolio inference is not an investor quote.',
   'Every sourceIds value must come from allowedSources. Cite only sources that support that specific statement; use no more than four.',
-  'Never print source IDs, numeric citation lists, database field names, raw JSON, claim IDs, or phrases such as Sample=40 cos.',
+  'Never print source IDs, numeric citation lists, database field names, raw JSON, claim IDs, or phrases such as "Sample=40 cos".',
   'Preserve every section key exactly once.',
-  'Return exactly this JSON shape and no prose outside it: {"executiveSummary":"reader-facing answer","sections":[{"key":"unchanged key","title":"reader-facing heading","summary":{"text":"conclusion","sourceIds":["allowed ID"]},"findings":[{"text":"specific supported finding","sourceIds":["allowed ID"]}]}]}.',
+  'Return exactly this JSON shape: {"executiveSummary":"reader-facing answer","sections":[{"key":"unchanged key","title":"reader-facing heading","summary":{"text":"conclusion","sourceIds":["allowed ID"]},"findings":[{"text":"specific supported finding","sourceIds":["allowed ID"]}]}]}.',
 ].join(' ');
 
 async function callNvidia(content: PersonalizedReportContent, request: ReportRequest, fetchImpl: FetchLike): Promise<{ result: ProviderResult; model: string }> {

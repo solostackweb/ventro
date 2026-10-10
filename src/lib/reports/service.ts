@@ -494,16 +494,25 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
 
   // 3e. Personal Direction: 3–5 Year Career Alignment
   if (include.has('personal_direction')) {
-    sections.push(section('personal_direction', 'Personal Direction: 3–5 Year Founder/Operator Trajectory',
-      'Mapping your interests against ecosystem signals to define a high-signal career path.',
+    const role = request.personalization?.role || 'analyst';
+    const riskTolerance = request.personalization?.riskTolerance || 'balanced';
+    const timeHorizon = request.personalization?.timeHorizon || 'medium';
+    const focusAreas = request.personalization?.focusAreas?.length ? request.personalization.focusAreas.join(', ') : request.topics.join(', ');
+    const sectorInterest = request.personalization?.sectorInterest?.length ? request.personalization.sectorInterest.join(', ') : '';
+    const geographyFocus = request.personalization?.geographyFocus?.length ? request.personalization.geographyFocus.join(', ') : request.geographies.join(', ');
+    const customInstructions = request.personalization?.customInstructions || '';
+
+    sections.push(section('personal_direction', 'Personal Direction: 3–5 Year Strategic Trajectory',
+      `Mapping your interests (${focusAreas}) against ecosystem signals to define a high-signal ${role} trajectory.`,
       [
-        `Your profile: ${request.topics.join(', ') || 'AI applications, developer tools, vertical AI'}.`,
+        `Role: ${role}. Risk tolerance: ${riskTolerance}. Time horizon: ${timeHorizon}.${sectorInterest ? ` Sector focus: ${sectorInterest}.` : ''}${geographyFocus ? ` Geography focus: ${geographyFocus}.` : ''}`,
         `YC signal alignment: Application-layer AI > infrastructure. Distribution-first > model-first. Vertical AI > horizontal.`,
         `Global VC signal: $3.7B+ flowing to AI apps this window. Series A avg $12M globally, $4M India. Vertical AI (legal, code, health, fintech) attracting premium valuations.`,
         `India-specific opportunity: 1B+ users, 22 languages, digital public infra (UPI, Aadhaar, ONDC). "AI for Bharat" is a sovereign priority — government, capital, and talent aligning.`,
         `Recommended 3-year arc: Year 1 — join/distribute a vertical AI product (code, legal, health, fintech). Year 2 — build distribution moat + proprietary data flywheel. Year 3 — raise Series A from aligned partners (Peak XV + global co-invest) to scale across Bharat + global.`,
         `Risk to watch: Model commoditization accelerates; pure wrappers die. Moat = proprietary data + distribution + workflow integration.`,
-      ], sourceIndexes(sources, ['https://ycombinator.com', 'https://peakxv.com', 'https://indiaai.gov.in'])));
+        customInstructions ? `Custom guidance: ${customInstructions}` : '',
+      ].filter(Boolean), sourceIndexes(sources, ['https://ycombinator.com', 'https://peakxv.com', 'https://indiaai.gov.in'])));
   }
 
   // 4. Market Patterns

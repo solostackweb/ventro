@@ -20,23 +20,44 @@ export const REPORT_SECTION_OPTIONS = [
 ] as const;
 
 const personalizationSchema = z.object({
-  includeEvidenceTrail: z.boolean().default(true),
+  includeEvidenceTrail: z.boolean().default(false),
   includeInvestmentTables: z.boolean().default(true),
   includeThesisComparison: z.boolean().default(true),
   includePatternAnalysis: z.boolean().default(true),
   includeInvestorProfiles: z.boolean().default(true),
   includeYCAnalysis: z.boolean().default(true),
   depthLevel: z.enum(['executive', 'analyst', 'partner']).default('analyst'),
+  // New user preference fields for personalization
+  focusAreas: z.array(z.string()).optional(),
+  investmentThesis: z.string().optional(),
+  riskTolerance: z.enum(['conservative', 'balanced', 'aggressive']).optional(),
+  timeHorizon: z.enum(['short', 'medium', 'long']).optional(),
+  role: z.enum(['founder', 'investor', 'analyst', 'student', 'operator']).optional(),
+  geographyFocus: z.array(z.string()).optional(),
+  sectorInterest: z.array(z.string()).optional(),
+  excludeSectors: z.array(z.string()).optional(),
+  preferredStage: z.array(z.string()).optional(),
+  customInstructions: z.string().optional(),
 });
 
 const personalizationDefaults = personalizationSchema.parse({
-  includeEvidenceTrail: true,
+  includeEvidenceTrail: false,
   includeInvestmentTables: true,
   includeThesisComparison: true,
   includePatternAnalysis: true,
   includeInvestorProfiles: true,
   includeYCAnalysis: true,
   depthLevel: 'analyst',
+  focusAreas: [],
+  investmentThesis: '',
+  riskTolerance: 'balanced',
+  timeHorizon: 'medium',
+  role: 'analyst',
+  geographyFocus: [],
+  sectorInterest: [],
+  excludeSectors: [],
+  preferredStage: [],
+  customInstructions: '',
 });
 
 export const reportRequestSchema = z.object({

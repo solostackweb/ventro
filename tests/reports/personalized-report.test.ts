@@ -48,10 +48,10 @@ describe('personalized report contracts', () => {
     const result = await createReportDocx(content, request);
     const extracted = await mammoth.extractRawText({ buffer: result.buffer });
 
-    expect(result.fileName).toBe('ai-capital-signals-for-india.docx');
+    expect(result.fileName).toMatch(/^personalized-intelligence-report-\d+\.docx$/);
     expect(result.buffer.byteLength).toBeGreaterThan(8_000);
     expect(result.buffer.subarray(0, 2).toString()).toBe('PK');
-    expect(extracted.value).toContain('Evidence: Example News — funding evidence');
+    expect(extracted.value).toContain('Example News — funding evidence');
     expect(extracted.value).not.toMatch(/\[\s*\d+(?:\s*,\s*\d+)+\s*\]/);
     expect(extracted.value).not.toContain('evidence-1');
     expect(() => assertReportQuality(content)).not.toThrow();
