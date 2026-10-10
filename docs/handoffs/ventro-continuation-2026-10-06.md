@@ -2599,3 +2599,37 @@ Required rollout:
 5. Open one generated file in Word for the remaining visual-only check.
 
 Status: `REPORT_V2_IMPLEMENTED_AND_VERIFIED — VALID_OPENAI_PRODUCTION_SECRET_AND_DEPLOYMENT_REQUIRED`.
+
+### NVIDIA-curated dashboard answers (2026-10-10)
+
+The dashboard answer cards were still presenting aggregation output as the answer itself, for example “30 verified rounds were identified…” and “Across 8 official investor theses…”. Root-cause tracing showed that the scheduled answer worker called `composeAnswer` without any narrator. The optional narrator contract could only rewrite section narratives; the large card headline always remained the deterministic count summary.
+
+Implemented:
+
+- Added paired answer synthesis so one NVIDIA request receives both evidence packets and can compare where verified capital is moving with what investors officially state and what their portfolios imply.
+- NVIDIA Nemotron 3.5 Lightning 30B A3B is the preferred dashboard narrator. The request explicitly requires conclusion-first language, stated-versus-observed alignment or divergence, and prohibits count-first/database-inventory headlines.
+- The model receives aggregate metrics, caveats, confidence, section narratives, and human-readable evidence labels. It does not receive raw archived documents or credentials, and it cannot mutate counts, filters, citations, confidence, or coverage.
+- Added strict response validation and a deterministic editorial fallback. If NVIDIA is missing, times out, or returns malformed content, the dashboard still produces generalized conclusions such as “Investor capital is concentrating most in agents…” rather than reverting to “N rounds were identified.”
+- Added compatibility for Nemotron's nested `{ headline, content }` section objects. Missing model-written sections retain their deterministic cited prose.
+- Disabled Nemotron thinking mode for this structured editorial task. NVIDIA documents that reasoning is enabled by default and emitted inside `content`; disabling it prevents reasoning traces from consuming the response budget or being mistaken for final JSON.
+- Increased the offline worker timeout to 90 seconds. Public dashboard requests remain fast because users read precomputed Supabase snapshots and never wait for the model.
+- The cards now visually separate the editorial conclusion from “Supporting market evidence” / “Alignment check” and display `NVIDIA synthesis` when the stored snapshot was model-curated.
+- Added `NVIDIA_API_KEY` to the scheduled ingestion workflow environment. The model name continues to use `NVIDIA_REPORT_MODEL` when configured, otherwise the Nemotron default.
+
+Verification:
+
+- Live synthetic NVIDIA run passed with model mode for both cards. Returned headlines: “Capital deployed in agent infrastructure at seed stage” and “Stated and observed demand converge on agent infrastructure.”
+- Answer/composer regression suite passed, including paired generation, nested Nemotron output normalization, conclusion-first deterministic fallback, disabled thinking mode, and citation immutability.
+- Full Jest run: 47 suites passed, 419 tests passed; 2 suites and 23 tests skipped.
+- Typecheck passed with a 4 GB Node heap (the default Windows process heap exhausted while scanning the full project).
+- ESLint passed with 0 errors and 199 existing warnings.
+- Production build passed and generated all 35 pages. The first build attempt hit a transient OneDrive `.next/types` lock; an unchanged retry passed.
+
+Required rollout:
+
+1. Add/confirm the GitHub Actions repository secret `NVIDIA_API_KEY`.
+2. Commit and push this revision.
+3. Manually run `Scheduled Ingestion Pipeline` once with `pipeline_type=news_ingestion` and `max_stages=1`, or wait for the next scheduled run. The final `Refresh 90-day intelligence answers` step creates new NVIDIA-curated snapshots.
+4. Hard-refresh `/dashboard?period=90`. Both cards should display the `NVIDIA synthesis` label and generalized conclusions. Existing snapshots remain unchanged until recomputation.
+
+Status: `DASHBOARD_NVIDIA_SYNTHESIS_VERIFIED — DEPLOY_AND_RECOMPUTE_REQUIRED`.
