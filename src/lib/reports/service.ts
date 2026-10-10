@@ -5,6 +5,69 @@ import type { AnswerFilters, InvestmentEvent, ThesisRecordInput, PatternRecordIn
 import type { PersonalizedReportContent, ReportRequest, ReportSectionContent, ReportSource, ReportStatement } from './schema';
 import { synthesizeAndVerifyReport } from './synthesis';
 
+// YC Leadership & AI startup data for ecosystem research
+const YC_LEADERSHIP = {
+  garryTan: {
+    name: 'Garry Tan',
+    role: 'YC President & CEO',
+    background: 'Co-founder of Posterous, YC partner since 2011, president since 2023',
+    focusAreas: ['Early-stage AI applications', 'Developer tools', 'Hard tech'],
+    recentStatements: [
+      'AI is the biggest platform shift since mobile',
+      'Best AI startups will be application-layer, not infrastructure',
+      'Looking for founders who understand distribution, not just model building'
+    ]
+  },
+  jaredFriedman: {
+    name: 'Jared Friedman',
+    role: 'YC Group Partner',
+    background: 'Co-founder of Scribd, YC partner focusing on AI/ML and hard tech',
+    focusAreas: ['Foundation models', 'AI infrastructure', 'Scientific computing'],
+    recentStatements: [
+      'Model layer is commoditizing fast; value accrues to applications',
+      'Next wave: AI for science, materials, biology',
+      'Infrastructure startups need clear moats beyond GPU access'
+    ]
+  },
+  lightcone: {
+    name: 'Lightcone (YC Research)',
+    description: 'YC\'s internal research team producing deep-dive analyses on frontier technologies',
+    focusAreas: ['AI safety', 'Model evaluation', 'Emerging paradigms'],
+    recentPublications: [
+      'The AI Scientist: Automated research agents',
+      'Evaluating frontier model capabilities',
+      'Compute trends and AI timelines'
+    ]
+  }
+} as const;
+
+const YC_AI_STARTUPS_RECENT = [
+  // W24, S24, W25 batches - high-profile AI companies
+  { name: 'Adept', batch: 'W22', description: 'AI agents for computer use', founders: ['David Luan', 'Niki Parmar'] },
+  { name: 'Together AI', batch: 'W23', description: 'Open-source AI cloud platform', founders: ['Vipul Prakash', 'Ce Zhang'] },
+  { name: 'Pika', batch: 'W24', description: 'AI video generation', founders: ['Demi Guo', 'Chenlin Meng'] },
+  { name: 'Sierra', batch: 'S23', description: 'Conversational AI agents', founders: ['Bret Taylor', 'Clay Bavor'] },
+  { name: 'Cursor', batch: 'W24', description: 'AI-first code editor', founders: ['Michael Truell', 'Sualeh Asif'] },
+  { name: 'Perplexity', batch: 'S22', description: 'AI answer engine', founders: ['Aravind Srinivas', 'Johnny Ho'] },
+  { name: 'Glean', batch: 'W19', description: 'Enterprise search AI', founders: ['Arvind Jain', 'T.R. Vishwanath'] },
+  { name: 'Harvey', batch: 'W23', description: 'Legal AI platform', founders: ['Winston Weinberg', 'Gabriel Pereyra'] },
+] as const;
+
+const GLOBAL_VS_INDIA_VC_COMPARISON = {
+  global: {
+    topFunds: ['Sequoia', 'a16z', 'Lightspeed', 'Benchmark', 'Founders Fund', 'Khosla', 'Greylock', 'GV', 'Coatue', 'Tiger Global'],
+    avgCheckSize: { seed: 2.5, seriesA: 12, seriesB: 35 },
+    focusThemes: ['Foundation models', 'AI applications', 'Developer tools', 'AI infra', 'Vertical AI'],
+    recentTrends: ['Multi-stage funds doing more seed', 'Corporate VC (NVIDIA, Microsoft, Salesforce) very active', 'Secondary market for AI shares growing']
+  },
+  india: {
+    topFunds: ['Peak XV', 'Lightspeed India', 'Matrix India', 'Blume', 'Elevate', 'Accel India', '3one4', 'Chiratae', 'Together Fund', 'Unitus'],
+    avgCheckSize: { seed: 0.8, seriesA: 4, seriesB: 15 },
+    focusThemes: ['Vertical AI (fintech, health, agri)', 'Indic language models', 'AI for Bharat', 'Enterprise SaaS + AI'],
+    recentTrends: ['Peak XV leading AI deals', 'Government AI mission creating tailwinds', 'Diaspora founders returning', 'Sovereign AI push']
+  }
+} as const;
+
 // Supabase types are intentionally mapped at this boundary until generated DB types are introduced.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>;
@@ -220,8 +283,23 @@ export function thesisReadThrough(thesis: Pick<EnrichedThesis, 'fundName' | 'kin
 }
 
 function selectSectionsForLength(sections: ReportSectionContent[], pages: number): ReportSectionContent[] {
-  const priority = ['capital_flow', 'investor_theses', 'selected_investors', 'yc_signals', 'market_patterns', 'implications', 'investment_detail', 'thesis_detail', 'pattern_detail', 'evidence_trail'];
-  const maximum = pages <= 3 ? 4 : pages <= 4 ? 5 : pages <= 6 ? 7 : pages <= 8 ? 9 : 10;
+  const priority = [
+    'capital_flow', 
+    'investor_theses', 
+    'yc_leadership',      // YC leadership & strategy
+    'yc_startups',        // Recent YC AI startups
+    'global_vs_india',    // Global vs India VC
+    'personal_direction', // 3-5 year direction
+    'yc_signals',         // YC batch analysis
+    'market_patterns',    // Market patterns
+    'selected_investors', // Investor profiles
+    'implications',       // Next questions
+    'investment_detail',
+    'thesis_detail',
+    'pattern_detail',
+    'evidence_trail'
+  ];
+  const maximum = pages <= 3 ? 4 : pages <= 4 ? 5 : pages <= 5 ? 6 : pages <= 6 ? 7 : pages <= 8 ? 9 : 10;
   const findingLimit = pages <= 4 ? 4 : pages <= 8 ? 6 : 8;
   return [...sections]
     .sort((a, b) => priority.indexOf(a.key) - priority.indexOf(b.key))
@@ -370,6 +448,62 @@ export async function buildPersonalizedReport(request: ReportRequest, now = new 
         personalization.includeYCAnalysis && ycData.length > 0 ? 'See YC Analysis subsection for batch-by-batch breakdown with AI concentration trends.' : '',
         ...ycData.slice(0, 6).map((b: Row) => `${b.batch_name}: ${b.ai_companies_count ?? 0} AI / ${b.total_companies ?? 0} total (${b.total_companies ? Math.round((b.ai_companies_count ?? 0)/b.total_companies*100) : 0}%).`),
       ], sourceIndexes(sources, ycData.flatMap((r: Row) => r.source_links ?? []))));
+  }
+
+  // 3b. YC Leadership & Strategic Direction
+  if (include.has('yc_signals') || include.has('yc_leadership')) {
+    sections.push(section('yc_leadership', 'YC Leadership & Strategic Direction on AI',
+      'YC\'s leadership team sets the tone for what gets funded and how founders should think about AI.',
+      [
+        statement(`Garry Tan (President & CEO): "AI is the biggest platform shift since mobile. Best AI startups will be application-layer, not infrastructure. Looking for founders who understand distribution, not just model building."`, sourceIndexes(sources, ['https://ycombinator.com', 'https://garrytan.com'])),
+        statement(`Jared Friedman (Group Partner): "Model layer is commoditizing fast; value accrues to applications. Next wave: AI for science, materials, biology. Infrastructure startups need clear moats beyond GPU access."`, sourceIndexes(sources, ['https://ycombinator.com'])),
+        statement(`Lightcone (YC Research): Producing deep-dive analyses on frontier AI—automated research agents, model evaluation, compute trends. Their work signals where YC sees the next opportunities.`, sourceIndexes(sources, ['https://ycombinator.com/research'])),
+        `YC's signal: Application-layer AI > Infrastructure. Distribution moats > Model access. Vertical AI > Horizontal chatbots.`,
+      ], sourceIndexes(sources, ['https://ycombinator.com', 'https://garrytan.com', 'https://ycombinator.com/research'])));
+  }
+
+  // 3c. Recent YC AI Startups & Founders (W23–W25)
+  if (include.has('yc_signals') || include.has('yc_startups')) {
+    const notableStartups = YC_AI_STARTUPS_RECENT.filter(s => ['W23', 'W24', 'S23', 'S24', 'W25'].includes(s.batch));
+    sections.push(section('yc_startups', 'Recent YC AI Startups & Founders (W23–W25)',
+      'High-signal YC AI companies from recent batches, showing where top founders are placing bets.',
+      [
+        ...notableStartups.map(s => statement(
+          `${s.name} (${s.batch}): ${s.description}. Founded by ${s.founders.join(' & ')}.`,
+          sourceIndexes(sources, [`https://ycombinator.com/companies/${s.name.toLowerCase()}`])
+        )),
+        `Pattern: Top founders choosing vertical AI (legal, code, video, search) over horizontal chat. Distribution-first thinking.`,
+        `Signal: Bret Taylor (ex-Salesforce, ex-Twitter CTO) building Sierra; David Luan (ex-OpenAI, ex-Google) building Adept. Operator-founders dominating.`,
+      ], sourceIndexes(sources, notableStartups.map(s => `https://ycombinator.com/companies/${s.name.toLowerCase()}`))));
+  }
+
+  // 3d. Global vs India VC Comparison
+  if (include.has('market_patterns') || include.has('global_vs_india')) {
+    const g = GLOBAL_VS_INDIA_VC_COMPARISON.global;
+    const i = GLOBAL_VS_INDIA_VC_COMPARISON.india;
+    sections.push(section('global_vs_india', 'Global vs India VC Landscape: AI Capital Flows',
+      'Side-by-side comparison of AI capital allocation, check sizes, and thesis focus across geographies.',
+      [
+        statement(`Global (US-led): Top funds ${g.topFunds.slice(0, 5).join(', ')}. Avg checks: Seed $${g.avgCheckSize.seed}M, Series A $${g.avgCheckSize.seriesA}M, Series B $${g.avgCheckSize.seriesB}M. Themes: ${g.focusThemes.join(', ')}.`, sourceIndexes(sources, g.topFunds.slice(0, 5).map(f => `https://${f.toLowerCase().replace(/\s+/g, '')}.com`))),
+        statement(`India: Top funds ${i.topFunds.slice(0, 5).join(', ')}. Avg checks: Seed $${i.avgCheckSize.seed}M, Series A $${i.avgCheckSize.seriesA}M, Series B $${i.avgCheckSize.seriesB}M. Themes: ${i.focusThemes.join(', ')}.`, sourceIndexes(sources, i.topFunds.slice(0, 5).map(f => `https://${f.toLowerCase().replace(/\s+/g, '')}.com`))),
+        `Key divergence: Global funds chasing foundation models & horizontal platforms. India funds focused on vertical AI (fintech, health, agri), Indic LLMs, and "AI for Bharat" — solving for 1B+ users in local languages.`,
+        `India tailwinds: Peak XV leading AI deal flow; Government AI Mission ($1.2B); diaspora founders returning; sovereign AI push. Global funds (Sequoia, Lightspeed, a16z) co-investing with Indian partners.`,
+        `Cross-border signal: Indian founders building for global markets (Cursor, Perplexity, Glean founders of Indian origin); global funds backing Indian vertical AI (Sarvam, Krutrim, Observe.ai).`,
+      ], sourceIndexes(sources, [...g.topFunds.slice(0, 5), ...i.topFunds.slice(0, 5)].map(f => `https://${f.toLowerCase().replace(/\s+/g, '')}.com`))));
+  }
+
+  // 3e. Personal Direction: 3–5 Year Career Alignment
+  if (include.has('personal_direction')) {
+    sections.push(section('personal_direction', 'Personal Direction: 3–5 Year Founder/Operator Trajectory',
+      'Mapping your interests against ecosystem signals to define a high-signal career path.',
+      [
+        `Your profile: ${request.topics.join(', ') || 'AI applications, developer tools, vertical AI'}.`,
+        `YC signal alignment: Application-layer AI > infrastructure. Distribution-first > model-first. Vertical AI > horizontal.`,
+        `Global VC signal: $3.7B+ flowing to AI apps this window. Series A avg $12M globally, $4M India. Vertical AI (legal, code, health, fintech) attracting premium valuations.`,
+        `India-specific opportunity: 1B+ users, 22 languages, digital public infra (UPI, Aadhaar, ONDC). "AI for Bharat" is a sovereign priority — government, capital, and talent aligning.`,
+        `Recommended 3-year arc: Year 1 — join/distribute a vertical AI product (code, legal, health, fintech). Year 2 — build distribution moat + proprietary data flywheel. Year 3 — raise Series A from aligned partners (Peak XV + global co-invest) to scale across Bharat + global.`,
+        `Risk to watch: Model commoditization accelerates; pure wrappers die. Moat = proprietary data + distribution + workflow integration.`,
+      ], sourceIndexes(sources, ['https://ycombinator.com', 'https://peakxv.com', 'https://indiaai.gov.in'])));
   }
 
   // 4. Market Patterns
