@@ -19,6 +19,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Your account is missing an email address.' }, { status: 400 });
     }
 
+    // Auto-activate trial for @mastersunion.org emails (safety net for callback)
+    if (user.email.endsWith('@mastersunion.org')) {
+      try {
+        await supabase.rpc('activate_student_trial');
+      } catch {
+        console.warn('Auto trial activation failed during onboarding for:', user.email);
+      }
+    }
+
     // All writes are anchored to the verified session user. The service role is
     // required here so onboarding can repair legacy accounts that predate the
     // auth.users -> user_profiles trigger.
